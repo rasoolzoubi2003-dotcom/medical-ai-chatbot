@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Consultation — AI Triage Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#12241F;
+    --paper:#EFF3EF;
+    --card:#FBFCFA;
+    --sage:#6E9C87;
+    --sage-dark:#4E7A67;
+    --amber:#D98E3F;
+    --slate:#4B5B57;
+    --line:#D8DED9;
+    --error:#B5493C;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0;
+    min-height:100vh;
+    background:
+      radial-gradient(circle at 12% 8%, rgba(110,156,135,0.10), transparent 40%),
+      radial-gradient(circle at 88% 92%, rgba(217,142,63,0.08), transparent 40%),
+      var(--paper);
+    font-family:'IBM Plex Sans', sans-serif;
+    color:var(--ink);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:32px 16px;
+  }
+
+  .page{ width:100%; max-width:520px; }
+
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--sage-dark);
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:10px;
+  }
+  .eyebrow::before{
+    content:'';
+    width:6px; height:6px; border-radius:50%;
+    background:var(--sage);
+    box-shadow:0 0 0 3px rgba(110,156,135,0.25);
+  }
+
+  h1{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:36px;
+    line-height:1.1;
+    margin:0 0 8px;
+    letter-spacing:-0.01em;
+  }
+  .sub{
+    color:var(--slate);
+    font-size:14.5px;
+    line-height:1.5;
+    margin:0 0 24px;
+    max-width:40ch;
+  }
+
+  /* Pulse divider — signature element, also doubles as the "thinking" indicator */
+  .pulse-wrap{
+    margin:22px 0 26px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+  }
+  .pulse-wrap span{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10.5px;
+    letter-spacing:.1em;
+    color:var(--slate);
+    white-space:nowrap;
+    text-transform:uppercase;
+  }
+  .pulse-line{ flex:1; height:24px; }
+  .pulse-line path{
+    fill:none;
+    stroke:var(--sage);
+    stroke-width:1.6;
+    stroke-linecap:round;
+    stroke-linejoin:round;
+  }
+  .pulse-line.active path{
+    stroke:var(--amber);
+    animation: travel 1.1s linear infinite;
+    stroke-dasharray: 6 10;
+  }
+  @keyframes travel{ to{ stroke-dashoffset:-32; } }
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:26px;
+    box-shadow:0 1px 2px rgba(18,36,31,0.04), 0 12px 32px -20px rgba(18,36,31,0.25);
+  }
+
+  label{
+    display:block;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10.5px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--slate);
+    margin:0 0 6px;
+  }
+  .field{ margin-bottom:16px; }
+  input[type="text"], input[type="password"]{
+    width:100%;
+    padding:11px 12px;
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:#fff;
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size:14.5px;
+    color:var(--ink);
+    outline:none;
+    transition:border-color .15s ease, box-shadow .15s ease;
+  }
+  input:focus{
+    border-color:var(--sage);
+    box-shadow:0 0 0 3px rgba(110,156,135,0.18);
+  }
+
+  button{
+    width:100%;
+    padding:12px;
+    border:none;
+    border-radius:8px;
+    font-family:'IBM Plex Sans', sans-serif;
+    font-weight:600;
+    font-size:14.5px;
+    cursor:pointer;
+    transition:transform .05s ease, background .15s ease;
+  }
+  button:active{ transform:translateY(1px); }
+
+  .btn-primary{ background:var(--ink); color:var(--paper); }
+  .btn-primary:hover{ background:#0B1712; }
+
+  .btn-secondary{
+    background:transparent;
+    color:var(--sage-dark);
+    border:1px solid var(--line);
+    margin-top:10px;
+  }
+  .btn-secondary:hover{ background:rgba(110,156,135,0.08); }
+
+  #auth-status{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--error);
+    min-height:16px;
+    margin:12px 0 0;
+  }
+
+  /* Chat */
+  #chat-section{ display:none; }
+
+  .chart-head{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    margin-bottom:14px;
+  }
+  .chart-head h2{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:22px;
+    margin:0;
+  }
+  .chart-head .status{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10.5px;
+    color:var(--sage-dark);
+    text-transform:uppercase;
+    letter-spacing:.08em;
+  }
+
+  #chat-box{
+    height:340px;
+    overflow-y:auto;
+    padding:6px 2px 6px;
+    margin-bottom:14px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .msg{
+    max-width:85%;
+    padding:10px 13px;
+    border-radius:10px;
+    font-size:14px;
+    line-height:1.5;
+  }
+  .msg .who{
+    display:block;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    margin-bottom:3px;
+    opacity:.65;
+  }
+  .msg.user{
+    align-self:flex-end;
+    background:var(--ink);
+    color:var(--paper);
+    border-bottom-right-radius:3px;
+  }
+  .msg.bot{
+    align-self:flex-start;
+    background:#fff;
+    color:var(--ink);
+    border:1px solid var(--line);
+    border-bottom-left-radius:3px;
+  }
+  .msg.bot.error-msg{ border-color:var(--error); color:var(--error); }
+
+  .composer{ display:flex; gap:8px; }
+  .composer input{ flex:1; }
+  .composer button{ width:auto; padding:11px 18px; white-space:nowrap; }
+
+  ::-webkit-scrollbar{ width:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:8px; }
+
+  @media (max-width:480px){
+    h1{ font-size:29px; }
+    .card{ padding:20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="eyebrow">AI Triage Room</div>
+  <h1>Consultation</h1>
+  <p class="sub">Sign in to talk with the assistant. Answers are informational — always confirm anything important with a clinician.</p>
+
+  <div class="pulse-wrap">
+    <span id="pulse-label">Idle</span>
+    <svg class="pulse-line" id="pulseLine" viewBox="0 0 300 24" preserveAspectRatio="none">
+      <path d="M0,12 L110,12 L120,3 L130,21 L140,12 L150,12 L160,20 L170,4 L180,12 L300,12"/>
+    </svg>
+  </div>
+
+  <!-- Auth Section -->
+  <div id="auth-section" class="card">
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="e.g. j.rivera" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="••••••••">
+    </div>
+    <button type="button" class="btn-primary" onclick="login()">Enter the room</button>
+    <button type="button" class="btn-secondary" onclick="registerAndLogin()">Create account &amp; enter</button>
+    <p id="auth-status"></p>
+  </div>
+
+  <!-- Chat Section -->
+  <div id="chat-section" class="card">
+    <div class="chart-head">
+      <h2>Session</h2>
+      <span class="status" id="session-status">Connected</span>
+    </div>
+    <div id="chat-box"></div>
+    <div class="composer">
+      <input type="text" id="question" placeholder="Ask a medical question…" onkeydown="if(event.key==='Enter') sendQuestion()">
+      <button type="button" class="btn-primary" onclick="sendQuestion()">Send</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let token = "";
+
+  function setPulse(active, label){
+    document.getElementById("pulseLine").classList.toggle("active", active);
+    document.getElementById("pulse-label").textContent = label;
+  }
+
+  function escapeHtml(str){
+    const d = document.createElement("div");
+    d.innerText = str;
+    return d.innerHTML;
+  }
+
+  async function registerAndLogin() {
+    const u = document.getElementById("username").value.trim();
+    const p = document.getElementById("password").value.trim();
+    const statusElem = document.getElementById("auth-status");
+    statusElem.innerText = "";
+
+    if (!u || !p) {
+      statusElem.innerText = "Please fill in both username and password.";
+      return;
+    }
+
+    try {
+      const res = await fetch("/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: u, password: p })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        await login();
+      } else {
+        statusElem.innerText = data.detail || "Registration failed.";
+      }
+    } catch (err) {
+      statusElem.innerText = "Server connection error.";
+    }
+  }
+
+  async function login() {
+    const u = document.getElementById("username").value.trim();
+    const p = document.getElementById("password").value.trim();
+    const statusElem = document.getElementById("auth-status");
+    statusElem.innerText = "";
+
+    if (!u || !p) {
+      statusElem.innerText = "Please fill in both username and password.";
+      return;
+    }
+
+    const formData = new URLSearchParams();
+    formData.append("username", u);
+    formData.append("password", p);
+
+    try {
+      const res = await fetch("/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formData
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        token = data.access_token;
+        document.getElementById("auth-section").style.display = "none";
+        document.getElementById("chat-section").style.display = "block";
+      } else {
+        statusElem.innerText = data.detail || "Invalid username or password.";
+      }
+    } catch (err) {
+      statusElem.innerText = "Server connection error.";
+    }
+  }
+
+  async function sendQuestion() {
+    const qInput = document.getElementById("question");
+    const q = qInput.value.trim();
+    if (!q) return;
+
+    const chatBox = document.getElementById("chat-box");
+    chatBox.innerHTML += `<div class="msg user"><span class="who">You</span>${escapeHtml(q)}</div>`;
+    qInput.value = "";
+    chatBox.scrollTop = chatBox.scrollHeight;
+    setPulse(true, "Thinking");
+
+    try {
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ question: q })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        chatBox.innerHTML += `<div class="msg bot"><span class="who">Assistant</span>${escapeHtml(data.answer)}</div>`;
+      } else {
+        chatBox.innerHTML += `<div class="msg bot error-msg"><span class="who">Error</span>Unauthorized or server error.</div>`;
+      }
+    } catch (err) {
+      chatBox.innerHTML += `<div class="msg bot error-msg"><span class="who">Error</span>Connection error.</div>`;
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+    setPulse(false, "Idle");
+  }
+</script>
+
+</body>
+</html>
+   
+
+

@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+chromadb_store/
+medical_chatbot.db
+.env

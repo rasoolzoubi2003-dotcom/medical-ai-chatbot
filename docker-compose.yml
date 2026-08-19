@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    container_name: medical-ai-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chromadb_store:/app/chromadb_store
+      - ./medical_chatbot.db:/app/medical_chatbot.db
+    restart: unless-stopped
