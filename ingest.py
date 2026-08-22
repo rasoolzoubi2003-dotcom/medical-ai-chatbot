@@ -6,7 +6,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
 # 1. تحديد مسارات الملفات والمجلدات
-DATASET_PATH = "medquad.csv"  # غير اسم الملف حسب شو عندك (csv أو txt)
+DATASET_PATH = "medquad.csv" 
 PERSIST_DIRECTORY = "./chromadb_store"
 
 def run_ingestion():

@@ -191,6 +191,28 @@
     letter-spacing:.08em;
   }
 
+  /* Header row above chat box: title/status on one side, history toggle on the other */
+  .chat-toolbar{
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    gap:8px;
+    margin-bottom:12px;
+  }
+  .btn-ghost{
+    width:auto;
+    padding:7px 12px;
+    background:transparent;
+    color:var(--slate);
+    border:1px solid var(--line);
+    font-size:12.5px;
+    font-family:'IBM Plex Mono', monospace;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+  }
+  .btn-ghost:hover{ background:rgba(110,156,135,0.08); color:var(--sage-dark); }
+  .btn-ghost.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+
   #chat-box{
     height:340px;
     overflow-y:auto;
@@ -235,6 +257,50 @@
   .composer input{ flex:1; }
   .composer button{ width:auto; padding:11px 18px; white-space:nowrap; }
 
+  /* History panel */
+  #history-box{
+    display:none;
+    height:340px;
+    overflow-y:auto;
+    padding:6px 2px 6px;
+    margin-bottom:14px;
+    flex-direction:column;
+    gap:10px;
+  }
+  .history-entry{
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:11px 13px;
+    background:#fff;
+  }
+  .history-entry .h-time{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+    color:var(--slate);
+    margin-bottom:6px;
+    display:block;
+  }
+  .history-entry .h-q{
+    font-size:14px;
+    font-weight:600;
+    margin-bottom:5px;
+  }
+  .history-entry .h-a{
+    font-size:13.5px;
+    color:var(--slate);
+    line-height:1.5;
+    white-space:pre-wrap;
+  }
+  .history-empty{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--slate);
+    text-align:center;
+    padding:30px 0;
+  }
+
   ::-webkit-scrollbar{ width:8px; }
   ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:8px; }
 
@@ -277,11 +343,20 @@
   <!-- Chat Section -->
   <div id="chat-section" class="card">
     <div class="chart-head">
-      <h2>Session</h2>
+      <h2 id="panel-title">Session</h2>
       <span class="status" id="session-status">Connected</span>
     </div>
+
+    <div class="chat-toolbar">
+      <button type="button" class="btn-ghost active" id="tab-chat-btn" onclick="showChatTab()">Chat</button>
+      <button type="button" class="btn-ghost" id="tab-history-btn" onclick="showHistoryTab()">History</button>
+    </div>
+
     <div id="chat-box"></div>
-    <div class="composer">
+
+    <div id="history-box"></div>
+
+    <div class="composer" id="composer">
       <input type="text" id="question" placeholder="Ask a medical question…" onkeydown="if(event.key==='Enter') sendQuestion()">
       <button type="button" class="btn-primary" onclick="sendQuestion()">Send</button>
     </div>
@@ -397,6 +472,68 @@
       chatBox.innerHTML += `<div class="msg bot error-msg"><span class="who">Error</span>Connection error.</div>`;
     }
     chatBox.scrollTop = chatBox.scrollHeight;
+    setPulse(false, "Idle");
+  }
+
+  // ---------------------------------------------------------------------
+  // History tab
+  // ---------------------------------------------------------------------
+
+  function formatTimestamp(raw){
+    try {
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return raw;
+      return d.toLocaleString();
+    } catch (e) {
+      return raw;
+    }
+  }
+
+  function showChatTab(){
+    document.getElementById("tab-chat-btn").classList.add("active");
+    document.getElementById("tab-history-btn").classList.remove("active");
+    document.getElementById("chat-box").style.display = "flex";
+    document.getElementById("history-box").style.display = "none";
+    document.getElementById("composer").style.display = "flex";
+    document.getElementById("panel-title").textContent = "Session";
+  }
+
+  async function showHistoryTab(){
+    document.getElementById("tab-history-btn").classList.add("active");
+    document.getElementById("tab-chat-btn").classList.remove("active");
+    document.getElementById("chat-box").style.display = "none";
+    document.getElementById("composer").style.display = "none";
+    document.getElementById("panel-title").textContent = "History";
+
+    const historyBox = document.getElementById("history-box");
+    historyBox.style.display = "flex";
+    historyBox.innerHTML = `<div class="history-empty">Loading…</div>`;
+    setPulse(true, "Loading");
+
+    try {
+      const res = await fetch("/history", {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        historyBox.innerHTML = `<div class="history-empty">Could not load history (unauthorized or server error).</div>`;
+      } else if (!Array.isArray(data) || data.length === 0) {
+        historyBox.innerHTML = `<div class="history-empty">No past conversations yet.</div>`;
+      } else {
+        historyBox.innerHTML = data.map(entry => `
+          <div class="history-entry">
+            <span class="h-time">${escapeHtml(formatTimestamp(entry.timestamp))}</span>
+            <div class="h-q">${escapeHtml(entry.question)}</div>
+            <div class="h-a">${escapeHtml(entry.answer)}</div>
+          </div>
+        `).join("");
+      }
+    } catch (err) {
+      historyBox.innerHTML = `<div class="history-empty">Connection error while loading history.</div>`;
+    }
+
     setPulse(false, "Idle");
   }
 </script>

@@ -1,6 +1,10 @@
+import logging
+import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
+
 import numpy as np
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -16,8 +20,31 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("medical_chatbot")
+
+# ---------------------------------------------------------------------------
 # إعدادات الأمان
-SECRET_KEY = "my_secret_key_for_medical_app_change_in_production"
+# ---------------------------------------------------------------------------
+# لازم يكون فيه ملف .env جوا مجلد المشروع فيه سطر:
+#   SECRET_KEY=قيمة_عشوائية_طويلة_وسرية
+# ممكن تولّد وحدة بسرعة بهاد الأمر:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY environment variable is not set. "
+        "Create a .env file with SECRET_KEY=<a long random value> before starting the app."
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -27,11 +54,11 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Smart & Strict Medical AI Chatbot")
 
-print("Loading Chroma DB...")
+logger.info("Loading Chroma DB...")
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 vector_db = Chroma(persist_directory="./chromadb_store", embedding_function=embeddings)
 
-print("Connecting to Ollama...")
+logger.info("Connecting to Ollama...")
 llm = ChatOllama(
     model="llama3.2:1b",
     temperature=0.1,
@@ -40,22 +67,19 @@ llm = ChatOllama(
 
 # Prompt ملائم ومباشر للأسئلة الطبية فقط
 prompt_template = ChatPromptTemplate.from_messages([
-    ("system", """You are a professional Medical AI Assistant. 
-    Use the provided medical context to answer the user's health question clearly and concisely in 2-3 sentences. 
+    ("system", """You are a professional Medical AI Assistant.
+    Use the provided medical context to answer the user's health question clearly and concisely in 2-3 sentences.
     Do not add unnecessary assumptions, filler words, or general conversational talk."""),
     ("user", "Context:\n{context}\n\nUser Question: {question}")
 ])
 
 # Prompt خاص بردود الدردشة العامة (ترحيب، تعارف، شكر، سؤال عن هوية البوت)
-# بدل ما نرجع نص ثابت واحد لكل الحالات، منخلي الـ LLM يولد رد طبيعي
-# ومناسب لسياق كل رسالة، بس ضمن حدود واضحة: يبقى ودود ومختصر
-# وبيرجع يوجه المستخدم لسؤال طبي بشكل غير مصطنع.
 CHITCHAT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a friendly Medical AI Assistant chatbot. The user just sent a casual, 
+    ("system", """You are a friendly Medical AI Assistant chatbot. The user just sent a casual,
     non-medical message (a greeting, introduction, thanks, or a question about who you are / what you do).
 
-    Reply naturally and warmly in 1-2 short sentences, appropriate to what they actually said 
-    (e.g. if they introduce themselves, acknowledge it briefly; if they ask what you do, explain 
+    Reply naturally and warmly in 1-2 short sentences, appropriate to what they actually said
+    (e.g. if they introduce themselves, acknowledge it briefly; if they ask what you do, explain
     you're a medical assistant; if they thank you, respond graciously).
 
     Always end by gently inviting them to ask a health or medical question.
@@ -66,12 +90,9 @@ CHITCHAT_PROMPT = ChatPromptTemplate.from_messages([
 
 # ---------------------------------------------------------------------------
 # Semantic Routing: تصنيف نية الرسالة عبر تشابه المعنى (cosine similarity)
-# باستخدام نفس embedding model الموجود أصلاً (all-MiniLM-L6-v2)، بدون أي
-# استدعاء لموديل توليدي. هاد حل حتمي 100% (نفس المدخل = نفس المخرج دايماً)
-# وما بعتمد على التزام موديل صغير بتعليمات نصية.
 # ---------------------------------------------------------------------------
 
-print("Building semantic intent anchors...")
+logger.info("Building semantic intent anchors...")
 
 MEDICAL_ANCHORS = [
     "I have a headache and fever",
@@ -112,12 +133,43 @@ OFFTOPIC_ANCHORS = [
     "translate this sentence to Spanish",
 ]
 
+# ---------------------------------------------------------------------------
+# طبقة أمان: كشف كلمات طوارئ قبل أي شي تاني
+# ملاحظة: هاي طبقة بسيطة بالكلمات المفتاحية (keyword-based) وليست تشخيصاً
+# طبياً، هدفها بس تحويل المستخدم فوراً لجهة طوارئ حقيقية بدل ما ينتظر رد
+# من موديل RAG محلي صغير على حالة ممكن تكون خطيرة.
+# ---------------------------------------------------------------------------
+
+EMERGENCY_KEYWORDS = [
+    "chest pain", "can't breathe", "cannot breathe", "difficulty breathing",
+    "shortness of breath", "severe bleeding", "heavy bleeding",
+    "unconscious", "not breathing", "stroke", "numb on one side",
+    "face drooping", "slurred speech", "severe allergic reaction",
+    "anaphylaxis", "suicidal", "want to kill myself", "want to die",
+    "overdose", "poisoning", "seizure", "severe burn",
+]
+
+EMERGENCY_RESPONSE = (
+    "This may be a medical emergency. Please call your local emergency number "
+    "(e.g. 911 or 199) or go to the nearest emergency room right away. "
+    "I'm not able to provide emergency care through this chat."
+)
+
+MEDICAL_DISCLAIMER = (
+    "\n\nThis is general information, not a medical diagnosis. "
+    "Please confirm with a licensed doctor before acting on it."
+)
+
+
+def contains_emergency_keywords(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in EMERGENCY_KEYWORDS)
+
 
 # عدد المقاطع اللي منجيبها من قاعدة البيانات لكل سؤال طبي
 RETRIEVAL_K = 3
 
-# سقف طول الـ context بالحروف، عشان ما نحمّل الموديل الصغير (1b) سياق
-# طويل زيادة قد يتخطى حد الـ context window تبعه ويأثر على جودة أو اكتمال الجواب
+# سقف طول الـ context بالحروف
 MAX_CONTEXT_CHARS = 1500
 
 
@@ -129,7 +181,7 @@ def build_context(docs_with_scores: list, min_score: float = 0.35, max_chars: in
 
     for doc, score in docs_with_scores:
         if score < min_score:
-            continue  # هاد المقطع مش قريب كفاية دلالياً، منتجاهله
+            continue
 
         text = doc.page_content.strip()
         if not text:
@@ -137,7 +189,7 @@ def build_context(docs_with_scores: list, min_score: float = 0.35, max_chars: in
 
         if total_len + len(text) > max_chars:
             remaining = max_chars - total_len
-            if remaining > 100:  # ما فيه داعي نضيف مقطع مقطوع صغير جداً وما بيفيد
+            if remaining > 100:
                 parts.append(text[:remaining])
             break
 
@@ -151,14 +203,13 @@ def _embed_anchors(phrases: list[str]) -> np.ndarray:
     vectors = embeddings.embed_documents(phrases)
     return np.array(vectors)
 
-# نحسب embeddings الأمثلة مرة وحدة بس عند تشغيل السيرفر (مش بكل طلب)
+
 MEDICAL_VECTORS = _embed_anchors(MEDICAL_ANCHORS)
 CHITCHAT_VECTORS = _embed_anchors(CHITCHAT_ANCHORS)
 OFFTOPIC_VECTORS = _embed_anchors(OFFTOPIC_ANCHORS)
 
 
 def _cosine_sim(query_vector: list[float], anchor_matrix: np.ndarray) -> float:
-    """أعلى قيمة تشابه (cosine similarity) بين سؤال المستخدم وأي مثال بمجموعة معينة."""
     q = np.array(query_vector)
     sims = (anchor_matrix @ q) / (
         np.linalg.norm(anchor_matrix, axis=1) * np.linalg.norm(q) + 1e-8
@@ -167,8 +218,7 @@ def _cosine_sim(query_vector: list[float], anchor_matrix: np.ndarray) -> float:
 
 
 def classify_intent(question: str) -> str:
-    """يرجع 'medical' أو 'chitchat' أو 'off_topic' بالاعتماد على أقرب فئة دلالياً.
-    حتمي 100%: نفس السؤال دايماً بيرجع نفس التصنيف، بدون أي عشوائية."""
+    """يرجع 'medical' أو 'chitchat' أو 'off_topic' بالاعتماد على أقرب فئة دلالياً."""
     query_vector = embeddings.embed_query(question)
 
     scores = {
@@ -184,14 +234,17 @@ def get_password_hash(password: str) -> str:
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
 
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
 
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
@@ -201,11 +254,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    
+
     user = db.query(models.User).filter(models.User.username == username).first()
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
 
 def save_and_return_chat(db: Session, user_id: int, question: str, answer: str):
     chat_entry = models.ChatHistory(
@@ -217,6 +271,7 @@ def save_and_return_chat(db: Session, user_id: int, question: str, answer: str):
     db.commit()
     return {"question": question, "answer": answer}
 
+
 # --- ENDPOINTS ---
 
 @app.post("/register")
@@ -224,25 +279,28 @@ def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user_data.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-    
+
     hashed_pwd = get_password_hash(user_data.password)
     new_user = models.User(username=user_data.username, hashed_password=hashed_pwd)
     db.add(new_user)
     db.commit()
+    logger.info(f"New user registered: {user_data.username}")
     return {"message": "User created successfully"}
+
 
 @app.post("/token")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect username or password")
-    
+
     access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 @app.post("/chat")
 def chat(
-    request: schemas.QueryRequest, 
+    request: schemas.QueryRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -250,34 +308,38 @@ def chat(
     if not user_query:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    # 1. تصنيف نية الرسالة أولاً عبر التشابه الدلالي (embeddings): medical / chitchat / off_topic
+    # 0. طبقة الطوارئ أولاً، قبل أي تصنيف أو RAG — أولوية قصوى
+    if contains_emergency_keywords(user_query):
+        logger.warning(f"Emergency keywords detected for user_id={current_user.id}")
+        return save_and_return_chat(db, current_user.id, user_query, EMERGENCY_RESPONSE)
+
+    # 1. تصنيف نية الرسالة عبر التشابه الدلالي (embeddings): medical / chitchat / off_topic
     intent = classify_intent(user_query)
 
-    # 2. دردشة عامة (ترحيب، تعارف، شكر، سؤال عن الحال أو الهوية) → رد طبيعي عبر الـ LLM (بدون RAG)
+    # 2. دردشة عامة → رد طبيعي عبر الـ LLM (بدون RAG)
     if intent == "chitchat":
         try:
             chitchat_response = llm.invoke(CHITCHAT_PROMPT.format_messages(question=user_query))
             answer_text = chitchat_response.content.strip()
         except Exception:
+            logger.exception("Chitchat LLM call failed")
             answer_text = "Hello! I'm an AI assistant specialized in medical and health questions. How can I help you today?"
         return save_and_return_chat(db, current_user.id, user_query, answer_text)
 
-    # 3. خارج النطاق الطبي تماماً (برمجة، رياضة، طبخ...) → اعتذار مباشر
+    # 3. خارج النطاق الطبي تماماً → اعتذار مباشر
     if intent == "off_topic":
         answer_text = "I apologize, but I am specialized only in medical and health-related questions. Please ask a health-related question."
         return save_and_return_chat(db, current_user.id, user_query, answer_text)
 
-    # 4. من هون وطالع: السؤال مصنّف medical → نكمل مسار الـ RAG العادي
-    # بنجيب أكتر من مقطع (k=3) بدل مقطع وحيد، عشان تغطية أشمل للأسئلة المركبة
+    # 4. السؤال مصنّف medical → نكمل مسار الـ RAG العادي
     docs_with_scores = vector_db.similarity_search_with_relevance_scores(user_query, k=RETRIEVAL_K)
 
-    # طبقة أمان إضافية: لو أعلى مقطع مسترجع أصلاً مش قريب كفاية، فالسؤال
-    # غالباً مش طبي فعلياً حتى لو الـ classifier صنفه هيك بالغلط
+    # طبقة أمان إضافية: لو أعلى مقطع مسترجع مش قريب كفاية، غالباً السؤال مش طبي فعلياً
     if not docs_with_scores or docs_with_scores[0][1] < 0.35:
         answer_text = "I apologize, but I am specialized only in medical and health-related questions. Please ask a health-related question."
         return save_and_return_chat(db, current_user.id, user_query, answer_text)
 
-    # 5. بناء الـ context من كل المقاطع اللي عدت حد الـ relevance، بحد أقصى لطول السياق
+    # 5. بناء الـ context
     context_text = build_context(docs_with_scores)
 
     if not context_text:
@@ -289,14 +351,30 @@ def chat(
         context=context_text,
         question=user_query
     )
-    
+
     try:
         llm_response = llm.invoke(formatted_prompt)
-        answer_text = llm_response.content.strip()
+        answer_text = llm_response.content.strip() + MEDICAL_DISCLAIMER
     except Exception:
+        logger.exception("Medical LLM call failed")
         answer_text = "Error connecting to Ollama. Make sure it is running."
 
     return save_and_return_chat(db, current_user.id, user_query, answer_text)
+
+
+@app.get("/history", response_model=List[schemas.ChatHistoryResponse])
+def get_history(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    history = (
+        db.query(models.ChatHistory)
+        .filter(models.ChatHistory.user_id == current_user.id)
+        .order_by(models.ChatHistory.timestamp.desc())
+        .all()
+    )
+    return history
+
 
 @app.get("/", response_class=HTMLResponse)
 def serve_html():
