@@ -1,10 +1,38 @@
+version: '3.8'
+
 services:
+  # 1. خدمة الـ FastAPI
   api:
     build: .
-    container_name: medical-ai-api
     ports:
       - "8000:8000"
     volumes:
-      - ./chromadb_store:/app/chromadb_store
-      - ./medical_chatbot.db:/app/medical_chatbot.db
-    restart: unless-stopped
+      - .:/app
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434   # يخلي main.py يتصل بـ Ollama جوا نفس الشبكة بدل localhost
+      - HF_HUB_OFFLINE=1
+    env_file:
+      - .env   # لتحميل SECRET_KEY وغيره
+    networks:
+      - app-network
+    depends_on:
+      - ollama
+
+  # 2. خدمة Ollama (بتشغّل الموديل اللي بيستخدمه main.py)
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-network
+    # ملاحظة: أول مرة لازم تسحب الموديل داخل الحاوية:
+    # docker compose exec ollama ollama pull llama3.2:1b
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  ollama_data:

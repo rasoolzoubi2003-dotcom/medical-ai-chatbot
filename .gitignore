@@ -4,3 +4,4 @@ __pycache__/
 chromadb_store/
 medical_chatbot.db
 .env
+.vscode/
