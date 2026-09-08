@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # 1. خدمة الـ FastAPI
   api:
     build: .
     ports:
@@ -9,16 +8,27 @@ services:
     volumes:
       - .:/app
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434   # يخلي main.py يتصل بـ Ollama جوا نفس الشبكة بدل localhost
-      - HF_HUB_OFFLINE=1
-    env_file:
-      - .env   # لتحميل SECRET_KEY وغيره
+      - DATABASE_URL=postgresql://user:password@db:5432/medical_db
+      - OLLAMA_BASE_URL=http://ollama:11434
     networks:
       - app-network
     depends_on:
+      - db
       - ollama
 
-  # 2. خدمة Ollama (بتشغّل الموديل اللي بيستخدمه main.py)
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: medical_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
   ollama:
     image: ollama/ollama:latest
     ports:
@@ -27,12 +37,11 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - app-network
-    # ملاحظة: أول مرة لازم تسحب الموديل داخل الحاوية:
-    # docker compose exec ollama ollama pull llama3.2:1b
 
 networks:
   app-network:
     driver: bridge
 
 volumes:
+  postgres_data:
   ollama_data:
