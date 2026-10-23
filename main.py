@@ -3,10 +3,11 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional, List
 
+import httpx
 import numpy as np
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
@@ -54,13 +55,23 @@ logger.info("Loading Chroma DB...")
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 vector_db = Chroma(persist_directory="./chromadb_store", embedding_function=embeddings)
 
+
+def vector_store_is_ready() -> bool:
+    """True if the vector store contains at least one document."""
+    return bool(vector_db.get(limit=1)["ids"])
+
+
+if not vector_store_is_ready():
+    logger.warning("Vector store is empty. Run `python ingest.py` first, or medical questions cannot be answered.")
+
 logger.info("Connecting to Ollama...")
 # لو التطبيق شغّال جوا Docker وOllama عندو خدمة منفصلة، منحدد عنوانها عبر
 # متغير بيئة OLLAMA_BASE_URL (متعرّف بالـ docker-compose). لو التطبيق شغّال
 # محلياً بدون Docker، بيرجع تلقائياً للعنوان الافتراضي على نفس الجهاز.
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 llm = ChatOllama(
-    model="llama3.2:1b",
+    model=OLLAMA_MODEL,
     base_url=OLLAMA_BASE_URL,
     temperature=0.1,
     num_predict=120
@@ -465,6 +476,31 @@ def get_history(
         .all()
     )
     return history
+
+
+def ollama_model_is_ready() -> bool:
+    """True if Ollama is reachable and the configured model has been pulled."""
+    try:
+        response = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return False
+    pulled = {model["name"] for model in response.json().get("models", [])}
+    return OLLAMA_MODEL in pulled
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    """Readiness check used by Docker: 200 when everything is ready, 503 otherwise."""
+    checks = {
+        "vector_store": vector_store_is_ready(),
+        "ollama_model": ollama_model_is_ready(),
+    }
+    healthy = all(checks.values())
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"status": "ok" if healthy else "unavailable", "model": OLLAMA_MODEL, "checks": checks},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

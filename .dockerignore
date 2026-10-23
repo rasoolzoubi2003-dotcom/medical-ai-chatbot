@@ -3,5 +3,8 @@ __pycache__/
 venv/
 .venv/
 .git/
+.vscode/
+.env
 chromadb_store/
+data/
 medical_chatbot.db

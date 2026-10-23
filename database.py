@@ -1,8 +1,11 @@
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # 1. تحديد مكان ملف قاعدة البيانات (سيتم إنشاؤه تلقائياً باسم medical_chatbot.db)
-SQLALCHEMY_DATABASE_URL = "sqlite:///./medical_chatbot.db"
+# Docker sets DATABASE_URL to a file inside a named volume so data survives restarts.
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./medical_chatbot.db")
 
 # 2. إنشاء المحرك (Engine) الذي يتصل بقاعدة البيانات
 engine = create_engine(
