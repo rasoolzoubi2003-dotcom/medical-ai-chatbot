@@ -2,9 +2,11 @@
 
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -16,7 +18,7 @@ import models
 import rag
 import safety
 import schemas
-from auth import create_access_token, get_current_user, hash_password, verify_password
+from auth import create_access_token, get_current_user, hash_password, unauthorized, verify_password
 from database import get_db
 
 models.Base.metadata.create_all(bind=database.engine)
@@ -26,6 +28,22 @@ if not rag.knowledge_base_ready():
     logger.warning("Vector store is missing or incomplete. Run `python ingest.py` first.")
 
 app = FastAPI(title="Medical RAG Chatbot")
+
+
+@app.exception_handler(RequestValidationError)
+def readable_validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+    """Return the first validation problem as one plain sentence the UI can show as-is."""
+    first = error.errors()[0]
+    message = str(first.get("msg", "Invalid request.")).removeprefix("Value error, ")
+    if not first.get("ctx", {}).get("error"):  # built-in errors such as "Field required"
+        field = ".".join(str(part) for part in first.get("loc", []) if part != "body")
+        message = f"{field}: {message}" if field else message
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": message})
+
+
+def find_user(db: Session, username: str) -> models.User | None:
+    """Look up a user by name, ignoring upper/lower case."""
+    return db.query(models.User).filter(func.lower(models.User.username) == username.strip().lower()).first()
 
 
 def save_and_return_chat(
@@ -38,11 +56,11 @@ def save_and_return_chat(
     return {"question": question, "answer": answer, "sources": sources}
 
 
-@app.post("/register")
+@app.post("/register", status_code=status.HTTP_201_CREATED)
 def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)) -> dict:
-    """Create an account."""
-    if db.query(models.User).filter(models.User.username == user_data.username).first():
-        raise HTTPException(status_code=400, detail="Username already registered")
+    """Create an account. Usernames are unique regardless of upper/lower case."""
+    if find_user(db, user_data.username):
+        raise HTTPException(status.HTTP_409_CONFLICT, "That username is already taken.")
 
     db.add(models.User(username=user_data.username, hashed_password=hash_password(user_data.password)))
     db.commit()
@@ -52,11 +70,17 @@ def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)) -> di
 
 @app.post("/token", response_model=schemas.Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)) -> dict:
-    """Exchange username and password for a bearer token."""
-    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    """Exchange username and password for a bearer token. Wrong credentials return 401."""
+    user = find_user(db, form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
+        raise unauthorized("Incorrect username or password.")
     return {"access_token": create_access_token(user.username), "token_type": "bearer"}
+
+
+@app.get("/me", response_model=schemas.UserInfo)
+def me(current_user: models.User = Depends(get_current_user)) -> models.User:
+    """The signed-in user. The UI calls this on page load to check a saved token."""
+    return current_user
 
 
 @app.post("/chat", response_model=schemas.ChatResponse)

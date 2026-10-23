@@ -211,6 +211,34 @@
     min-height:16px;
     margin:12px 0 0;
   }
+  #auth-status.info{ color:var(--teal); }
+
+  .hint{
+    font-size:11.5px;
+    color:var(--muted);
+    margin:5px 0 0;
+  }
+  /* Confirm-password field and hints only show while creating an account. */
+  #auth-section:not(.register) .register-only{ display:none; }
+
+  .auth-switch{
+    font-size:13px;
+    color:var(--muted);
+    margin:14px 0 0;
+    text-align:center;
+  }
+  .link-btn{
+    padding:0;
+    background:none;
+    color:var(--teal-deep);
+    font-size:13px;
+    font-weight:600;
+    text-decoration:underline;
+    text-underline-offset:2px;
+  }
+  .link-btn:hover{ color:var(--ink); }
+  button:disabled{ opacity:.6; cursor:wait; }
+  .btn-ghost.logout{ margin-right:auto; }
 
   .disclaimer{
     font-size:12px;
@@ -433,21 +461,30 @@
   <div class="doc">
     <!-- Auth Section -->
     <div id="auth-section-wrap">
-      <div class="tab"><span class="dot"></span>Intake</div>
-      <div id="auth-section" class="card">
+      <div class="tab"><span class="dot"></span><span id="auth-tab-label">Sign in</span></div>
+      <form id="auth-section" class="card" novalidate onsubmit="submitAuth(event)">
         <div class="field">
           <label for="username">Username</label>
-          <input type="text" id="username" placeholder="e.g. j.rivera" autocomplete="off">
+          <input type="text" id="username" placeholder="e.g. j_rivera" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="30" aria-describedby="username-hint">
+          <p class="hint register-only" id="username-hint">3–30 characters: letters, numbers and underscores.</p>
         </div>
         <div class="field">
           <label for="password">Password</label>
-          <input type="password" id="password" placeholder="••••••••">
+          <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" aria-describedby="password-hint">
+          <p class="hint register-only" id="password-hint">At least 8 characters.</p>
         </div>
-        <button type="button" class="btn-primary" onclick="login()">Enter consultation</button>
-        <button type="button" class="btn-secondary" onclick="registerAndLogin()">Create account &amp; enter</button>
-        <p id="auth-status"></p>
+        <div class="field register-only">
+          <label for="confirm-password">Confirm password</label>
+          <input type="password" id="confirm-password" placeholder="••••••••" autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn-primary" id="auth-submit">Sign in</button>
+        <p id="auth-status" role="alert" aria-live="polite"></p>
+        <p class="auth-switch">
+          <span id="auth-switch-text">New here?</span>
+          <button type="button" class="link-btn" id="auth-switch-btn" onclick="toggleAuthMode()">Create an account</button>
+        </p>
         <p class="disclaimer">Rounds is an AI assistant, not a doctor. In an emergency, contact your local emergency services immediately.</p>
-      </div>
+      </form>
     </div>
 
     <!-- Chat Section -->
@@ -460,6 +497,7 @@
         </div>
 
         <div class="chat-toolbar">
+          <button type="button" class="btn-ghost logout" id="logout-btn" onclick="logout()">Log out</button>
           <button type="button" class="btn-ghost active" id="tab-chat-btn" onclick="showChatTab()">Chat</button>
           <button type="button" class="btn-ghost" id="tab-history-btn" onclick="showHistoryTab()">History</button>
         </div>
@@ -479,7 +517,172 @@
 </div>
 
 <script>
+  // ---------------------------------------------------------------------
+  // Session: the login token is kept in localStorage so a page refresh
+  // doesn't sign the user out. Any 401 clears it and shows the sign-in form.
+  // ---------------------------------------------------------------------
+
+  const TOKEN_KEY = "medchat_token";
+  const USERNAME_RE = /^[A-Za-z0-9_]{3,30}$/;
   let token = "";
+  let authMode = "login";  // "login" or "register"
+
+  class SessionExpired extends Error {}
+
+  function saveToken(value){
+    token = value;
+    try { localStorage.setItem(TOKEN_KEY, value); } catch (e) { /* storage blocked: keep it in memory only */ }
+  }
+
+  function loadToken(){
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
+  }
+
+  function clearToken(){
+    token = "";
+    try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* nothing stored */ }
+  }
+
+  // fetch() for signed-in requests: adds the token, and handles an expired or invalid one.
+  async function apiFetch(url, options = {}){
+    const headers = { ...(options.headers || {}), "Authorization": `Bearer ${token}` };
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+      clearToken();
+      showAuth("Your session has expired. Please sign in again.");
+      throw new SessionExpired();
+    }
+    return res;
+  }
+
+  // The API returns errors as {"detail": "..."}; fall back to a generic message.
+  async function errorMessage(res, fallback){
+    try {
+      const data = await res.json();
+      if (typeof data.detail === "string") return data.detail;
+    } catch (e) { /* not JSON */ }
+    return fallback;
+  }
+
+  function setAuthStatus(message, kind = "error"){
+    const el = document.getElementById("auth-status");
+    el.textContent = message || "";
+    el.classList.toggle("info", kind === "info");
+  }
+
+  function showAuth(message = "", kind = "error"){
+    // Clear the previous user's conversation from the page.
+    document.getElementById("chat-box").innerHTML = "";
+    document.getElementById("history-box").innerHTML = "";
+    document.getElementById("password").value = "";
+    document.getElementById("confirm-password").value = "";
+    document.getElementById("chat-section-wrap").style.display = "none";
+    document.getElementById("auth-section-wrap").style.display = "block";
+    setAuthStatus(message, kind);
+    setPulse(false, "Idle");
+  }
+
+  function showChat(username){
+    document.getElementById("auth-section-wrap").style.display = "none";
+    document.getElementById("chat-section-wrap").style.display = "block";
+    document.getElementById("session-status").textContent = username ? `Signed in as ${username}` : "Signed in";
+    showChatTab();
+    document.getElementById("question").focus();
+  }
+
+  // On page load: reuse a saved token if the server still accepts it.
+  async function restoreSession(){
+    token = loadToken();
+    if (!token) { showAuth(); return; }
+    try {
+      const res = await apiFetch("/me");
+      if (res.ok) {
+        showChat((await res.json()).username);
+      } else {
+        showAuth(await errorMessage(res, "Could not restore your session. Please sign in."));
+      }
+    } catch (err) {
+      if (!(err instanceof SessionExpired)) showAuth("Can't reach the server. Please try again in a moment.");
+    }
+  }
+
+  function logout(){
+    clearToken();
+    showAuth("You have signed out.", "info");
+  }
+
+  // ---------------------------------------------------------------------
+  // Sign in / create account
+  // ---------------------------------------------------------------------
+
+  function toggleAuthMode(){
+    authMode = authMode === "login" ? "register" : "login";
+    const registering = authMode === "register";
+    document.getElementById("auth-section").classList.toggle("register", registering);
+    document.getElementById("auth-tab-label").textContent = registering ? "Create account" : "Sign in";
+    document.getElementById("auth-submit").textContent = registering ? "Create account" : "Sign in";
+    document.getElementById("auth-switch-text").textContent = registering ? "Already have an account?" : "New here?";
+    document.getElementById("auth-switch-btn").textContent = registering ? "Sign in" : "Create an account";
+    document.getElementById("password").autocomplete = registering ? "new-password" : "current-password";
+    document.getElementById("confirm-password").value = "";
+    setAuthStatus("");
+  }
+
+  // Same rules as the server, checked first so mistakes are shown instantly.
+  function registrationError(username, password, confirmPassword){
+    if (!USERNAME_RE.test(username)) return "Username must be 3-30 characters: letters, numbers and underscores only.";
+    if (password.length < 8) return "Password must be at least 8 characters.";
+    if (new TextEncoder().encode(password).length > 72) return "Password is too long (maximum 72 bytes).";
+    if (password !== confirmPassword) return "Passwords do not match.";
+    return "";
+  }
+
+  async function submitAuth(event){
+    event.preventDefault();
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;  // not trimmed: spaces are allowed
+    const submit = document.getElementById("auth-submit");
+
+    if (!username || !password) { setAuthStatus("Please enter your username and password."); return; }
+    if (authMode === "register") {
+      const problem = registrationError(username, password, document.getElementById("confirm-password").value);
+      if (problem) { setAuthStatus(problem); return; }
+    }
+
+    setAuthStatus("");
+    submit.disabled = true;
+    try {
+      if (authMode === "register") {
+        const res = await fetch("/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        });
+        if (!res.ok) { setAuthStatus(await errorMessage(res, "Could not create the account.")); return; }
+      }
+      await login(username, password);
+    } catch (err) {
+      setAuthStatus("Can't reach the server. Please try again in a moment.");
+    } finally {
+      submit.disabled = false;
+    }
+  }
+
+  async function login(username, password){
+    const res = await fetch("/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ username, password })
+    });
+    if (!res.ok) { setAuthStatus(await errorMessage(res, "Sign-in failed.")); return; }
+    saveToken((await res.json()).access_token);
+    if (authMode === "register") toggleAuthMode();
+    await restoreSession();
+  }
+
+  // ---------------------------------------------------------------------
+  // Chat
+  // ---------------------------------------------------------------------
 
   // When a "Sources" section is opened, scroll it into view inside the chat or history box.
   document.addEventListener("toggle", (event) => {
@@ -514,68 +717,10 @@
     return `<details class="sources"><summary>Sources (${sources.length})</summary>${items}</details>`;
   }
 
-  async function registerAndLogin() {
-    const u = document.getElementById("username").value.trim();
-    const p = document.getElementById("password").value.trim();
-    const statusElem = document.getElementById("auth-status");
-    statusElem.innerText = "";
-
-    if (!u || !p) {
-      statusElem.innerText = "Please fill in both username and password.";
-      return;
-    }
-
-    try {
-      const res = await fetch("/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: u, password: p })
-      });
-      const data = await res.json();
-
-      if (res.ok) {
-        await login();
-      } else {
-        statusElem.innerText = data.detail || "Registration failed.";
-      }
-    } catch (err) {
-      statusElem.innerText = "Server connection error.";
-    }
-  }
-
-  async function login() {
-    const u = document.getElementById("username").value.trim();
-    const p = document.getElementById("password").value.trim();
-    const statusElem = document.getElementById("auth-status");
-    statusElem.innerText = "";
-
-    if (!u || !p) {
-      statusElem.innerText = "Please fill in both username and password.";
-      return;
-    }
-
-    const formData = new URLSearchParams();
-    formData.append("username", u);
-    formData.append("password", p);
-
-    try {
-      const res = await fetch("/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData
-      });
-      const data = await res.json();
-
-      if (res.ok) {
-        token = data.access_token;
-        document.getElementById("auth-section-wrap").style.display = "none";
-        document.getElementById("chat-section-wrap").style.display = "block";
-      } else {
-        statusElem.innerText = data.detail || "Invalid username or password.";
-      }
-    } catch (err) {
-      statusElem.innerText = "Server connection error.";
-    }
+  function addMessage(kind, who, html){
+    const chatBox = document.getElementById("chat-box");
+    chatBox.insertAdjacentHTML("beforeend", `<div class="msg ${kind}"><span class="who">${who}</span>${html}</div>`);
+    chatBox.scrollTop = chatBox.scrollHeight;
   }
 
   async function sendQuestion() {
@@ -583,32 +728,26 @@
     const q = qInput.value.trim();
     if (!q) return;
 
-    const chatBox = document.getElementById("chat-box");
-    chatBox.insertAdjacentHTML("beforeend", `<div class="msg user"><span class="who">You</span>${escapeHtml(q)}</div>`);
+    addMessage("user", "You", escapeHtml(q));
     qInput.value = "";
-    chatBox.scrollTop = chatBox.scrollHeight;
     setPulse(true, "Thinking");
 
     try {
-      const res = await fetch("/chat", {
+      const res = await apiFetch("/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q })
       });
-      const data = await res.json();
       if (res.ok) {
-        chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot"><span class="who">Rounds</span><div class="text">${escapeHtml(data.answer)}</div>${renderSources(data.sources)}</div>`);
+        const data = await res.json();
+        addMessage("bot", "Rounds", `<div class="text">${escapeHtml(data.answer)}</div>${renderSources(data.sources)}`);
       } else {
-        const message = typeof data.detail === "string" ? data.detail : "Something went wrong. Please try again.";
-        chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>${escapeHtml(message)}</div>`);
+        addMessage("bot error-msg", "Error", escapeHtml(await errorMessage(res, "Something went wrong. Please try again.")));
       }
     } catch (err) {
-      chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>Connection error.</div>`);
+      if (err instanceof SessionExpired) return;
+      addMessage("bot error-msg", "Error", "Connection error. Please try again.");
     }
-    chatBox.scrollTop = chatBox.scrollHeight;
     setPulse(false, "Idle");
   }
 
@@ -617,13 +756,8 @@
   // ---------------------------------------------------------------------
 
   function formatTimestamp(raw){
-    try {
-      const d = new Date(raw);
-      if (isNaN(d.getTime())) return raw;
-      return d.toLocaleString();
-    } catch (e) {
-      return raw;
-    }
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? raw : d.toLocaleString();
   }
 
   function showChatTab(){
@@ -650,36 +784,30 @@
     setPulse(true, "Loading");
 
     try {
-      const res = await fetch("/history", {
-        method: "GET",
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      const data = await res.json();
-
+      const res = await apiFetch("/history");
       if (!res.ok) {
-        historyBox.innerHTML = `<div class="history-empty">Could not load history (unauthorized or server error).</div>`;
-      } else if (!Array.isArray(data) || data.length === 0) {
-        historyBox.innerHTML = `<div class="history-empty">No past conversations yet.</div>`;
+        historyBox.innerHTML = `<div class="history-empty">${escapeHtml(await errorMessage(res, "Could not load history."))}</div>`;
       } else {
-        historyBox.innerHTML = data.map(entry => `
-          <div class="history-entry">
-            <span class="h-time">${escapeHtml(formatTimestamp(entry.timestamp))}</span>
-            <div class="h-q">${escapeHtml(entry.question)}</div>
-            <div class="h-a">${escapeHtml(entry.answer)}</div>
-            ${renderSources(entry.sources)}
-          </div>
-        `).join("");
+        const data = await res.json();
+        historyBox.innerHTML = data.length === 0
+          ? `<div class="history-empty">No past conversations yet.</div>`
+          : data.map(entry => `
+            <div class="history-entry">
+              <span class="h-time">${escapeHtml(formatTimestamp(entry.timestamp))}</span>
+              <div class="h-q">${escapeHtml(entry.question)}</div>
+              <div class="h-a">${escapeHtml(entry.answer)}</div>
+              ${renderSources(entry.sources)}
+            </div>`).join("");
       }
     } catch (err) {
+      if (err instanceof SessionExpired) return;
       historyBox.innerHTML = `<div class="history-empty">Connection error while loading history.</div>`;
     }
-
     setPulse(false, "Idle");
   }
+
+  restoreSession();
 </script>
 
 </body>
 </html>
-   
-
-
