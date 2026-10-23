@@ -246,7 +246,8 @@ CHITCHAT_PROMPT = ChatPromptTemplate.from_messages([
 RETRIEVAL_K = 3
 
 # سقف طول الـ context بالحروف
-MAX_CONTEXT_CHARS = 1500
+# Chunks are up to ~1,000 characters (see ingest.py), so this fits RETRIEVAL_K of them.
+MAX_CONTEXT_CHARS = 3000
 
 # حد أدنى للثقة بالتصنيف الدلالي — لو أعلى فئة ما وصلت هالحد،
 # نعتبر السؤال خارج النطاق بدل ما "نخمّن" بأقرب فئة موجودة

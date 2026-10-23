@@ -15,7 +15,6 @@ bcrypt==4.0.1
 
 # RAG
 langchain-core==1.5.5
-langchain-community==0.4.2
 langchain-text-splitters==1.1.2
 langchain-chroma==1.1.0
 langchain-huggingface==1.2.2
