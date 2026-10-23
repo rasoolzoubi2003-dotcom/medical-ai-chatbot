@@ -252,8 +252,11 @@ MAX_CONTEXT_CHARS = 1500
 # نعتبر السؤال خارج النطاق بدل ما "نخمّن" بأقرب فئة موجودة
 MIN_CONFIDENCE = 0.45
 
+# Retrieved passages scoring below this are treated as not relevant.
+MIN_RELEVANCE_SCORE = 0.35
 
-def build_context(docs_with_scores: list, min_score: float = 0.35, max_chars: int = MAX_CONTEXT_CHARS) -> str:
+
+def build_context(docs_with_scores: list, min_score: float = MIN_RELEVANCE_SCORE, max_chars: int = MAX_CONTEXT_CHARS) -> str:
     """يبني نص الـ context من كل المقاطع اللي عدت حد الـ relevance score،
     ويوقف قبل ما يتخطى السقف المسموح لطول السياق."""
     parts = []
@@ -318,6 +321,19 @@ def classify_intent(question: str) -> str:
         return "off_topic"
 
     return best_intent
+
+
+def route_question(question: str) -> str:
+    """Decide how a question is handled before retrieval.
+
+    Returns one of: 'emergency', 'injection', 'chitchat', 'off_topic', 'medical'.
+    Used by /chat and by evaluate.py, so the evaluation tests the real routing.
+    """
+    if contains_emergency_keywords(question):
+        return "emergency"
+    if contains_injection_attempt(question):
+        return "injection"
+    return classify_intent(question)
 
 
 def get_password_hash(password: str) -> str:
@@ -399,27 +415,16 @@ def chat(
     if not user_query:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    # 0. طبقة الطوارئ أولاً — أولوية قصوى، قبل أي شي تاني
-    if contains_emergency_keywords(user_query):
+    # 0. التوجيه: طوارئ أولاً، بعدين الحقن، بعدين التصنيف الدلالي
+    intent = route_question(user_query)
+
+    if intent == "emergency":
         logger.warning(f"Emergency keywords detected for user_id={current_user.id}")
         return save_and_return_chat(db, current_user.id, user_query, EMERGENCY_RESPONSE)
 
-    # 0.5. طبقة الكلمات المفتاحية السريعة لمحاولات الحقن — قبل أي embedding
-    if contains_injection_attempt(user_query):
-        logger.warning(
-            f"[keyword] Injection attempt detected for user_id={current_user.id}: {user_query!r}"
-        )
-        return save_and_return_chat(db, current_user.id, user_query, OFF_TOPIC_RESPONSE)
-
-    # 1. التصنيف الدلالي (medical / chitchat / off_topic / injection)
-    intent = classify_intent(user_query)
-
-    # 1.5. لو التصنيف الدلالي نفسه شخّصها "injection" (حتى لو ما طابقت
-    # أي كلمة بالقائمة حرفياً) — نرفض بنفس الطريقة، بدون استدعاء LLM
+    # محاولات الحقن (بالكلمات المفتاحية أو بالتصنيف الدلالي) — نرفض بدون استدعاء LLM
     if intent == "injection":
-        logger.warning(
-            f"[semantic] Injection attempt detected for user_id={current_user.id}: {user_query!r}"
-        )
+        logger.warning(f"Injection attempt detected for user_id={current_user.id}: {user_query!r}")
         return save_and_return_chat(db, current_user.id, user_query, OFF_TOPIC_RESPONSE)
 
     # 2. دردشة عامة → رد طبيعي عبر الـ LLM (مع الـ prompt المقوّى ضد الحقن)
@@ -439,7 +444,7 @@ def chat(
     # 4. السؤال مصنّف medical → نكمل مسار الـ RAG العادي
     docs_with_scores = vector_db.similarity_search_with_relevance_scores(user_query, k=RETRIEVAL_K)
 
-    if not docs_with_scores or docs_with_scores[0][1] < 0.35:
+    if not docs_with_scores or docs_with_scores[0][1] < MIN_RELEVANCE_SCORE:
         return save_and_return_chat(db, current_user.id, user_query, OFF_TOPIC_RESPONSE)
 
     # 5. بناء الـ context
