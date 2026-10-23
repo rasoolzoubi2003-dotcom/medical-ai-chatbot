@@ -1,23 +1,20 @@
-import os
+"""Database connection (SQLite by default) for users and chat history."""
+
+from collections.abc import Iterator
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-# 1. تحديد مكان ملف قاعدة البيانات (سيتم إنشاؤه تلقائياً باسم medical_chatbot.db)
-# Docker sets DATABASE_URL to a file inside a named volume so data survives restarts.
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./medical_chatbot.db")
+import config
 
-# 2. إنشاء المحرك (Engine) الذي يتصل بقاعدة البيانات
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
-    connect_args={"check_same_thread": False} # خاص بـ SQLite ليتعامل مع طلبات FastAPI المتعددة
-)
+# SQLite needs check_same_thread=False because FastAPI serves requests from several threads.
+connect_args = {"check_same_thread": False} if config.DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(config.DATABASE_URL, connect_args=connect_args)
 
-# 3. إنشاء جلسة (Session) نستخدمها لاحقاً للإضافة أو الاستعلام من الداتا بيز
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# 4. الـ Base الذي ستورث منه جميع الجداول لاحقاً
 Base = declarative_base()
+
 
 def add_missing_columns() -> None:
     """Add columns introduced after a database was created.
@@ -31,8 +28,8 @@ def add_missing_columns() -> None:
             connection.execute(text("ALTER TABLE chat_history ADD COLUMN sources JSON"))
 
 
-# 5. دالة تجلب الجلسة وتغلقها تلقائياً بعد كل طلب (Dependency Injection)
-def get_db():
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency: one database session per request, always closed afterwards."""
     db = SessionLocal()
     try:
         yield db

@@ -27,9 +27,11 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-DATASET_PATH = "medquad.csv"
-PERSIST_DIRECTORY = "./chromadb_store"
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+import config
+
+DATASET_PATH = config.DATASET_PATH
+PERSIST_DIRECTORY = config.CHROMA_DIR
+EMBEDDING_MODEL = config.EMBEDDING_MODEL
 
 # all-MiniLM-L6-v2 reads at most 256 tokens and silently ignores the rest,
 # so every chunk (question + answer part + 2 special tokens) must fit in that.

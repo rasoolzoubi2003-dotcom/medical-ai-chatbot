@@ -33,8 +33,9 @@ import random
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from types import ModuleType
 
-DATASET_PATH = "medquad.csv"
+DATASET_PATH = "medquad.csv"  # the evaluation always uses the bundled dataset
 PARAPHRASE_PATH = "eval_questions.csv"
 SAFETY_PATH = "safety_questions.csv"
 DEV_PATH = "dev_questions.csv"
@@ -93,17 +94,17 @@ def shares_answer_text(passage: str, answers: list[str], min_chars: int = MIN_SH
     return False
 
 
-def evaluate(cases: list[tuple[str, list[str]]], app) -> list[Result]:
+def evaluate(cases: list[tuple[str, list[str]]], rag: ModuleType) -> list[Result]:
     """Run retrieval and routing for each (query, expected answers) pair."""
     results = []
     for query, answers in cases:
-        docs_with_scores = app.vector_db.similarity_search_with_relevance_scores(query, k=TOP_K)
+        docs_with_scores = rag.vector_db.similarity_search_with_relevance_scores(query, k=TOP_K)
         rank = next(
             (i for i, (doc, _) in enumerate(docs_with_scores, start=1) if shares_answer_text(doc.page_content, answers)),
             None,
         )
         top_score = docs_with_scores[0][1] if docs_with_scores else 0.0
-        route, _ = app.route_question(query)
+        route, _ = rag.route_question(query)
         results.append(Result(query, rank, top_score, route))
     return results
 
@@ -125,13 +126,13 @@ def print_summary(name: str, results: list[Result]) -> None:
     print(f"False refusals   {(n - answered) / n:6.1%} ({n - answered}/{n})  reasons: {reasons}")
 
 
-def evaluate_safety(app) -> None:
+def evaluate_safety(rag: ModuleType) -> None:
     """Check that off-topic and injection messages are refused, and greetings and emergencies are recognised."""
     with open(SAFETY_PATH, encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     by_label: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for row in rows:
-        route, _ = app.route_question(row["query"])
+        route, _ = rag.route_question(row["query"])
         by_label[row["label"]].append((row["query"], route))
 
     print(f"\n=== Safety questions ({len(rows)} questions) ===")
@@ -145,7 +146,7 @@ def evaluate_safety(app) -> None:
         print(f"  FAIL  expected {label}, got {route}: {query}")
 
 
-def tune_threshold(app, answers_by_question: dict[str, list[str]], eval_questions: set[str]) -> None:
+def tune_threshold(rag: ModuleType, answers_by_question: dict[str, list[str]], eval_questions: set[str]) -> None:
     """Sweep MIN_RELEVANCE_SCORE on the dev set and recommend a value.
 
     Picks the threshold that maximises (medical answered rate - off-topic accepted rate).
@@ -159,8 +160,8 @@ def tune_threshold(app, answers_by_question: dict[str, list[str]], eval_question
     # A question is answered when it passes the text checks and its best passage scores >= threshold.
     scored = []
     for query, label in dev:
-        passes_checks = app.precheck(query) is None
-        top = app.vector_db.similarity_search_with_relevance_scores(query, k=1)
+        passes_checks = rag.precheck(query) is None
+        top = rag.vector_db.similarity_search_with_relevance_scores(query, k=1)
         scored.append((label, passes_checks, top[0][1] if top else 0.0))
 
     def rates(threshold: float) -> tuple[float, float]:
@@ -197,9 +198,10 @@ def main() -> None:
     parser.add_argument("--tune", action="store_true", help="choose MIN_RELEVANCE_SCORE on the dev set instead of reporting results")
     args = parser.parse_args()
 
-    # Import the app here so --help works without loading models.
+    # Import the RAG module here so --help works without loading models.
     logging.disable(logging.WARNING)
-    import main as app
+    import config
+    import rag
 
     answers_by_question = load_answers_by_question(DATASET_PATH)
 
@@ -210,7 +212,7 @@ def main() -> None:
 
     if args.tune:
         held_out = set(sample) | {row["expected_question"] for row in paraphrase_rows}
-        tune_threshold(app, answers_by_question, held_out)
+        tune_threshold(rag, answers_by_question, held_out)
         return
 
     dataset_cases = [(q, answers_by_question[q]) for q in sample]
@@ -219,12 +221,12 @@ def main() -> None:
     if missing:
         raise SystemExit(f"Expected question not found in {DATASET_PATH} for: {missing}")
 
-    print(f"MIN_RELEVANCE_SCORE = {app.MIN_RELEVANCE_SCORE}")
-    print_summary("Dataset questions", evaluate(dataset_cases, app))
-    paraphrase_results = evaluate(paraphrase_cases, app)
+    print(f"MIN_RELEVANCE_SCORE = {config.MIN_RELEVANCE_SCORE}")
+    print_summary("Dataset questions", evaluate(dataset_cases, rag))
+    paraphrase_results = evaluate(paraphrase_cases, rag)
     print_summary("Paraphrased questions", paraphrase_results)
     print_details(paraphrase_results)
-    evaluate_safety(app)
+    evaluate_safety(rag)
 
 
 if __name__ == "__main__":

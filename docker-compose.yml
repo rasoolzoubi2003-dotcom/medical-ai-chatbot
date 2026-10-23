@@ -9,6 +9,10 @@
 x-app: &app
   build: .
   image: medical-ai-chatbot:latest
+  # App settings from .env (see .env.example). Values under `environment:` below win.
+  env_file:
+    - path: .env
+      required: false
 
 services:
   ollama:

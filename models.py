@@ -1,30 +1,36 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, JSON
-from sqlalchemy.orm import relationship
-from datetime import datetime
-from database import Base  # استوردنا الـ Base اللي عملناه بالملف الأول
+"""Database tables: users and their chat history."""
 
-# 1. جدول المستخدمين
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+
+from database import Base
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class User(Base):
-    __tablename__ = "users"  # اسم الجدول بالـ Database
+    __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True, nullable=False) # اسم مستخدم فريد
-    hashed_password = Column(String, nullable=False) # كلمة السر بعد التشفير
-    created_at = Column(DateTime, default=datetime.utcnow)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)  # bcrypt hash, never the plain password
+    created_at = Column(DateTime, default=utc_now)
 
-    # علاقة بربط المستخدم مع سجل محادثاته
     history = relationship("ChatHistory", back_populates="owner")
 
-# 2. جدول سجل المحادثات الطبية
+
 class ChatHistory(Base):
     __tablename__ = "chat_history"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id")) # مفتاح أجنبي يربط المحادثة بـ id المستخدم
-    question = Column(Text, nullable=False) # السؤال الطبي
-    answer = Column(Text, nullable=False)   # الإجابة من الـ ChromaDB
-    sources = Column(JSON, nullable=True)   # المقاطع اللي انبنى عليها الجواب (list of dicts)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    sources = Column(JSON, nullable=True)  # passages the answer was based on (list of dicts)
+    timestamp = Column(DateTime, default=utc_now)  # stored in UTC
 
-    # علاقة عكسية ترجع للمستخدم صاحب المحادثة
     owner = relationship("User", back_populates="history")

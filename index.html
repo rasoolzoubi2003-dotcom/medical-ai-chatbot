@@ -602,7 +602,8 @@
       if (res.ok) {
         chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot"><span class="who">Rounds</span><div class="text">${escapeHtml(data.answer)}</div>${renderSources(data.sources)}</div>`);
       } else {
-        chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>Unauthorized or server error.</div>`);
+        const message = typeof data.detail === "string" ? data.detail : "Something went wrong. Please try again.";
+        chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>${escapeHtml(message)}</div>`);
       }
     } catch (err) {
       chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>Connection error.</div>`);
