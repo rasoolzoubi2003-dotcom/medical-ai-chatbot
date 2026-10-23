@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base  # استوردنا الـ Base اللي عملناه بالملف الأول
@@ -23,6 +23,7 @@ class ChatHistory(Base):
     user_id = Column(Integer, ForeignKey("users.id")) # مفتاح أجنبي يربط المحادثة بـ id المستخدم
     question = Column(Text, nullable=False) # السؤال الطبي
     answer = Column(Text, nullable=False)   # الإجابة من الـ ChromaDB
+    sources = Column(JSON, nullable=True)   # المقاطع اللي انبنى عليها الجواب (list of dicts)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     # علاقة عكسية ترجع للمستخدم صاحب المحادثة

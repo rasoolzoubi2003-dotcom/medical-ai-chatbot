@@ -263,7 +263,7 @@
   .btn-ghost.active{ background:var(--teal-deep); color:#EAF1EE; border-color:var(--teal-deep); }
 
   #chat-box{
-    height:340px;
+    height:min(62vh, 560px);
     overflow-y:auto;
     padding:6px 2px 6px;
     margin-bottom:14px;
@@ -300,6 +300,59 @@
     border-bottom-left-radius:3px;
   }
   .msg.bot.error-msg{ border-color:var(--error); color:var(--error); }
+  .msg .text{ white-space:pre-wrap; }
+
+  /* ---------- Sources ---------- */
+  .sources{
+    margin-top:10px;
+    padding-top:8px;
+    border-top:1px solid var(--line);
+  }
+  .sources summary{
+    cursor:pointer;
+    list-style:none;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    color:var(--teal);
+  }
+  .sources summary::-webkit-details-marker{ display:none; }
+  .sources summary::before{ content:"\25B8  "; }
+  .sources[open] summary::before{ content:"\25BE  "; }
+  .sources summary:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; border-radius:4px; }
+  .source{
+    margin-top:8px;
+    padding:9px 11px;
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:var(--card);
+  }
+  .source-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:10px;
+    font-size:12px;
+    font-weight:600;
+  }
+  .source-score{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10.5px;
+    font-weight:400;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+  .source-meta{
+    font-size:11.5px;
+    color:var(--muted);
+    margin:2px 0 6px;
+  }
+  .source-excerpt{
+    font-size:12.5px;
+    line-height:1.5;
+    max-height:150px;
+    overflow-y:auto;
+    white-space:pre-wrap;
+  }
 
   .composer{ display:flex; gap:8px; }
   .composer input{ flex:1; }
@@ -308,7 +361,7 @@
   /* ---------- History ---------- */
   #history-box{
     display:none;
-    height:340px;
+    height:min(62vh, 560px);
     overflow-y:auto;
     padding:6px 2px 6px;
     margin-bottom:14px;
@@ -428,6 +481,13 @@
 <script>
   let token = "";
 
+  // When a "Sources" section is opened, scroll it into view inside the chat or history box.
+  document.addEventListener("toggle", (event) => {
+    if (event.target.matches?.(".sources") && event.target.open) {
+      event.target.scrollIntoView({ block: "start" });
+    }
+  }, true);
+
   function setPulse(active, label){
     document.getElementById("pulseLine").classList.toggle("active", active);
     document.getElementById("pulse-label").textContent = label;
@@ -435,8 +495,23 @@
 
   function escapeHtml(str){
     const d = document.createElement("div");
-    d.innerText = str;
+    d.textContent = str;
     return d.innerHTML;
+  }
+
+  // Collapsible list of the passages an answer was based on.
+  function renderSources(sources){
+    if (!Array.isArray(sources) || sources.length === 0) return "";
+    const items = sources.map((s, i) => `
+      <div class="source">
+        <div class="source-head">
+          <span>[${i + 1}] ${escapeHtml(s.source)}</span>
+          <span class="source-score" title="Cosine similarity between your question and this passage">similarity ${Number(s.score).toFixed(2)}</span>
+        </div>
+        <div class="source-meta">${escapeHtml(s.question)}</div>
+        <div class="source-excerpt">${escapeHtml(s.excerpt)}</div>
+      </div>`).join("");
+    return `<details class="sources"><summary>Sources (${sources.length})</summary>${items}</details>`;
   }
 
   async function registerAndLogin() {
@@ -509,7 +584,7 @@
     if (!q) return;
 
     const chatBox = document.getElementById("chat-box");
-    chatBox.innerHTML += `<div class="msg user"><span class="who">You</span>${escapeHtml(q)}</div>`;
+    chatBox.insertAdjacentHTML("beforeend", `<div class="msg user"><span class="who">You</span>${escapeHtml(q)}</div>`);
     qInput.value = "";
     chatBox.scrollTop = chatBox.scrollHeight;
     setPulse(true, "Thinking");
@@ -525,12 +600,12 @@
       });
       const data = await res.json();
       if (res.ok) {
-        chatBox.innerHTML += `<div class="msg bot"><span class="who">Rounds</span>${escapeHtml(data.answer)}</div>`;
+        chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot"><span class="who">Rounds</span><div class="text">${escapeHtml(data.answer)}</div>${renderSources(data.sources)}</div>`);
       } else {
-        chatBox.innerHTML += `<div class="msg bot error-msg"><span class="who">Error</span>Unauthorized or server error.</div>`;
+        chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>Unauthorized or server error.</div>`);
       }
     } catch (err) {
-      chatBox.innerHTML += `<div class="msg bot error-msg"><span class="who">Error</span>Connection error.</div>`;
+      chatBox.insertAdjacentHTML("beforeend", `<div class="msg bot error-msg"><span class="who">Error</span>Connection error.</div>`);
     }
     chatBox.scrollTop = chatBox.scrollHeight;
     setPulse(false, "Idle");
@@ -590,6 +665,7 @@
             <span class="h-time">${escapeHtml(formatTimestamp(entry.timestamp))}</span>
             <div class="h-q">${escapeHtml(entry.question)}</div>
             <div class="h-a">${escapeHtml(entry.answer)}</div>
+            ${renderSources(entry.sources)}
           </div>
         `).join("");
       }

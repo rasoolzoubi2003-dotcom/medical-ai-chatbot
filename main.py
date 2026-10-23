@@ -49,6 +49,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 models.Base.metadata.create_all(bind=engine)
+database.add_missing_columns()
 
 app = FastAPI(title="Smart & Strict Medical AI Chatbot")
 
@@ -226,10 +227,29 @@ MAX_CONTEXT_CHARS = 3600
 MIN_RELEVANCE_SCORE = 0.45
 
 
-def build_context(docs_with_scores: list, min_score: float = MIN_RELEVANCE_SCORE, max_chars: int = MAX_CONTEXT_CHARS) -> str:
-    """يبني نص الـ context من كل المقاطع اللي عدت حد الـ relevance score،
-    ويوقف قبل ما يتخطى السقف المسموح لطول السياق."""
-    parts = []
+# Full names of the organisations in the dataset's "source" column (all NIH/US government sites).
+SOURCE_NAMES = {
+    "GHR": "Genetics Home Reference (NLM)",
+    "GARD": "Genetic and Rare Diseases Information Center (NIH)",
+    "NIDDK": "National Institute of Diabetes and Digestive and Kidney Diseases",
+    "NINDS": "National Institute of Neurological Disorders and Stroke",
+    "MPlusHealthTopics": "MedlinePlus Health Topics (NLM)",
+    "NIHSeniorHealth": "NIHSeniorHealth (NIH)",
+    "CancerGov": "National Cancer Institute",
+    "NHLBI": "National Heart, Lung, and Blood Institute",
+    "CDC": "Centers for Disease Control and Prevention",
+}
+
+
+def select_passages(
+    docs_with_scores: list, min_score: float = MIN_RELEVANCE_SCORE, max_chars: int = MAX_CONTEXT_CHARS
+) -> list[tuple]:
+    """يختار المقاطع اللي عدت حد الـ relevance score، ويوقف قبل ما يتخطى سقف طول السياق.
+
+    Returns (doc, score, text) for each passage the model will see; the last
+    text may be trimmed to fit max_chars.
+    """
+    passages = []
     total_len = 0
 
     for doc, score in docs_with_scores:
@@ -243,13 +263,30 @@ def build_context(docs_with_scores: list, min_score: float = MIN_RELEVANCE_SCORE
         if total_len + len(text) > max_chars:
             remaining = max_chars - total_len
             if remaining > 100:
-                parts.append(text[:remaining])
+                passages.append((doc, score, text[:remaining]))
             break
 
-        parts.append(text)
+        passages.append((doc, score, text))
         total_len += len(text)
 
-    return "\n\n".join(parts)
+    return passages
+
+
+def build_context(passages: list[tuple]) -> str:
+    """Join the selected passages into the context text for the prompt."""
+    return "\n\n".join(text for _, _, text in passages)
+
+
+def to_source(doc, score: float, text: str) -> dict:
+    """Describe a passage for the API response: where it comes from and what it says."""
+    code = doc.metadata.get("source", "")
+    return {
+        "question": doc.metadata.get("question", ""),
+        "source": SOURCE_NAMES.get(code, code),
+        "topic": doc.metadata.get("focus_area", ""),
+        "excerpt": text.split("\nAnswer: ", 1)[-1].strip(),
+        "score": round(float(score), 3),
+    }
 
 
 def precheck(question: str) -> str | None:
@@ -310,15 +347,18 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
-def save_and_return_chat(db: Session, user_id: int, question: str, answer: str):
+def save_and_return_chat(db: Session, user_id: int, question: str, answer: str, sources: list[dict] | None = None) -> dict:
+    """Store the exchange in the user's history and return it as the API response."""
+    sources = sources or []
     chat_entry = models.ChatHistory(
         user_id=user_id,
         question=question,
-        answer=answer
+        answer=answer,
+        sources=sources,
     )
     db.add(chat_entry)
     db.commit()
-    return {"question": question, "answer": answer}
+    return {"question": question, "answer": answer, "sources": sources}
 
 
 # --- ENDPOINTS ---
@@ -347,12 +387,13 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@app.post("/chat")
+@app.post("/chat", response_model=schemas.ChatResponse)
 def chat(
     request: schemas.QueryRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    """Answer a health question with RAG and return the source passages used."""
     user_query = request.question.strip()
     if not user_query:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -376,8 +417,9 @@ def chat(
     if route == "off_topic":
         return save_and_return_chat(db, current_user.id, user_query, OFF_TOPIC_RESPONSE)
 
-    # 5. بناء الـ context
-    context_text = build_context(docs_with_scores)
+    # 5. بناء الـ context من المقاطع المختارة (ونفس المقاطع بترجع كمصادر للجواب)
+    passages = select_passages(docs_with_scores)
+    context_text = build_context(passages)
 
     if not context_text:
         return save_and_return_chat(db, current_user.id, user_query, OFF_TOPIC_RESPONSE)
@@ -397,8 +439,10 @@ def chat(
     except Exception:
         logger.exception("Medical LLM call failed")
         answer_text = "Error connecting to Ollama. Make sure it is running."
+        return save_and_return_chat(db, current_user.id, user_query, answer_text)
 
-    return save_and_return_chat(db, current_user.id, user_query, answer_text)
+    sources = [to_source(doc, score, text) for doc, score, text in passages]
+    return save_and_return_chat(db, current_user.id, user_query, answer_text, sources)
 
 
 @app.get("/history", response_model=List[schemas.ChatHistoryResponse])

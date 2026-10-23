@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # 1. تحديد مكان ملف قاعدة البيانات (سيتم إنشاؤه تلقائياً باسم medical_chatbot.db)
@@ -18,6 +18,18 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 4. الـ Base الذي ستورث منه جميع الجداول لاحقاً
 Base = declarative_base()
+
+def add_missing_columns() -> None:
+    """Add columns introduced after a database was created.
+
+    create_all() only creates missing tables, not missing columns, so databases
+    from earlier versions need chat_history.sources added once.
+    """
+    columns = {column["name"] for column in inspect(engine).get_columns("chat_history")}
+    if "sources" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE chat_history ADD COLUMN sources JSON"))
+
 
 # 5. دالة تجلب الجلسة وتغلقها تلقائياً بعد كل طلب (Dependency Injection)
 def get_db():
