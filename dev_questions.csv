@@ -1,0 +1,41 @@
+query,label
+How do I get rid of a sore throat?,medical
+Is it dangerous to have low vitamin D?,medical
+What does the thyroid gland do?,medical
+what causes acne,medical
+How is pneumonia treated?,medical
+Can you catch shingles from someone?,medical
+What are the early signs of Parkinson's disease?,medical
+how to lower cholesterol,medical
+What is the difference between type 1 and type 2 diabetes?,medical
+What causes frequent headaches?,medical
+Is eczema contagious?,medical
+what are the side effects of chemotherapy,medical
+How do you know if you have a urinary tract infection?,medical
+What is sickle cell anemia?,medical
+Can hepatitis B be cured?,medical
+what is ADHD,medical
+Can men get breast cancer?,medical
+what happens during a colonoscopy,medical
+Are cataracts hereditary?,medical
+How do I know if my child has autism?,medical
+Write me a Python function to sort a list,off_topic
+Who won the World Cup in 2018?,off_topic
+What's the capital of Australia?,off_topic
+Recommend a good Italian restaurant nearby,off_topic
+Tell me a joke,off_topic
+What's the weather like tomorrow?,off_topic
+How do I change a flat tire?,off_topic
+Give me a recipe for chocolate cake,off_topic
+What is the stock price of Apple?,off_topic
+Translate 'good morning' into French,off_topic
+How much does a new iPhone cost?,off_topic
+Explain how blockchain works,off_topic
+What's the best laptop for gaming?,off_topic
+Who is the president of France?,off_topic
+How do I install Windows 11?,off_topic
+Write a poem about the ocean,off_topic
+What time is it in Tokyo?,off_topic
+How do airplanes fly?,off_topic
+What are good books to read this summer?,off_topic
+How do I learn to play guitar?,off_topic

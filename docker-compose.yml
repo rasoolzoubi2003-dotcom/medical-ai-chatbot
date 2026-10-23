@@ -1,47 +1,72 @@
-version: '3.8'
+# One command: `docker compose up --build`
+#
+# Start-up order:
+#   ollama       -> LLM server
+#   ollama-pull  -> one-off: downloads the chat model into the ollama volume
+#   ingest       -> one-off: builds the vector store (skipped if it already exists)
+#   api          -> FastAPI app, starts only after both one-off jobs succeed
+
+x-app: &app
+  build: .
+  image: medical-ai-chatbot:latest
+  # App settings from .env (see .env.example). Values under `environment:` below win.
+  env_file:
+    - path: .env
+      required: false
 
 services:
-  api:
-    build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/medical_db
-      - OLLAMA_BASE_URL=http://ollama:11434
-    networks:
-      - app-network
-    depends_on:
-      - db
-      - ollama
-
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: medical_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - app-network
-
   ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    image: ollama/ollama:0.40.9
     volumes:
       - ollama_data:/root/.ollama
-    networks:
-      - app-network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 
-networks:
-  app-network:
-    driver: bridge
+  ollama-pull:
+    image: ollama/ollama:0.40.9
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:3b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  ingest:
+    <<: *app
+    command: ["python", "ingest.py"]
+    volumes:
+      - chroma_data:/app/chromadb_store
+    restart: "no"
+
+  api:
+    <<: *app
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?Copy .env.example to .env and set SECRET_KEY}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      DATABASE_URL: sqlite:////app/data/medical_chatbot.db
+    volumes:
+      - chroma_data:/app/chromadb_store
+      - app_data:/app/data
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+      ingest:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
 
 volumes:
-  postgres_data:
   ollama_data:
+  chroma_data:
+  app_data:

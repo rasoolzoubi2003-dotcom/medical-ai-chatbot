@@ -1,23 +1,35 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+"""Database connection (SQLite by default) for users and chat history."""
 
-# 1. تحديد مكان ملف قاعدة البيانات (سيتم إنشاؤه تلقائياً باسم medical_chatbot.db)
-SQLALCHEMY_DATABASE_URL = "sqlite:///./medical_chatbot.db"
+from collections.abc import Iterator
 
-# 2. إنشاء المحرك (Engine) الذي يتصل بقاعدة البيانات
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
-    connect_args={"check_same_thread": False} # خاص بـ SQLite ليتعامل مع طلبات FastAPI المتعددة
-)
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-# 3. إنشاء جلسة (Session) نستخدمها لاحقاً للإضافة أو الاستعلام من الداتا بيز
+import config
+
+# SQLite needs check_same_thread=False because FastAPI serves requests from several threads.
+connect_args = {"check_same_thread": False} if config.DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(config.DATABASE_URL, connect_args=connect_args)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# 4. الـ Base الذي ستورث منه جميع الجداول لاحقاً
 Base = declarative_base()
 
-# 5. دالة تجلب الجلسة وتغلقها تلقائياً بعد كل طلب (Dependency Injection)
-def get_db():
+
+def add_missing_columns() -> None:
+    """Add columns introduced after a database was created.
+
+    create_all() only creates missing tables, not missing columns, so databases
+    from earlier versions need chat_history.sources added once.
+    """
+    columns = {column["name"] for column in inspect(engine).get_columns("chat_history")}
+    if "sources" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE chat_history ADD COLUMN sources JSON"))
+
+
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency: one database session per request, always closed afterwards."""
     db = SessionLocal()
     try:
         yield db
