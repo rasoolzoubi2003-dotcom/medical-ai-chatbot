@@ -1,13 +1,11 @@
 """Build the ChromaDB vector store from medquad.csv.
 
-Each CSV row is one question/answer pair. Long answers are split into chunks,
-and every chunk repeats its question, so no passage ends up holding only a
-question or only a fragment with no topic. Source and topic are kept as
-metadata so answers can cite where their information came from.
+Each CSV row is one question/answer pair. Answers are split into chunks that
+each repeat their question, so every passage carries its topic. Source and
+topic are kept as metadata so answers can cite where they came from.
 
-When a build finishes, a marker file records the number of chunks and a
-fingerprint of the dataset and settings. A store without a matching marker
-(an interrupted build, or a changed dataset or settings) is rebuilt.
+A finished build writes a marker with the chunk count and a fingerprint of the
+dataset and settings; a store without a matching marker is rebuilt.
 
 Usage:
   python ingest.py            # build the store (skipped if a complete, current one exists)
@@ -40,10 +38,9 @@ BATCH_SIZE = 1000
 # Bump this when the chunk format changes, so existing stores get rebuilt.
 FORMAT_VERSION = 3
 
-# Vector index settings. Cosine similarity keeps scores easy to reason about
-# (1.0 = same meaning). E5 scores sit close together, so Chroma's default index
-# (16 links per vector) missed the true best passage for about 1% of questions
-# and one of the true top 3 for about 15%; this graph is denser and searched wider.
+# Cosine similarity keeps scores easy to read (1.0 = same meaning). E5 scores sit
+# close together, which makes Chroma's default index (16 links per vector) skip
+# some true nearest neighbours; a denser graph searched more widely finds them.
 COLLECTION_METADATA = {
     "hnsw:space": "cosine",
     "hnsw:M": 48,

@@ -3,7 +3,7 @@
 # Start-up order:
 #   ollama       -> LLM server
 #   ollama-pull  -> one-off: downloads the chat model into the ollama volume
-#   ingest       -> one-off: builds the vector store (skipped if it already exists)
+#   ingest       -> one-off: builds the vector store (skipped if a complete, current one exists)
 #   api          -> FastAPI app, starts only after both one-off jobs succeed
 
 x-app: &app

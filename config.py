@@ -28,8 +28,7 @@ DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./medical_chatbot.db")
 CHROMA_DIR: str = os.getenv("CHROMA_DIR", "./chromadb_store")
 DATASET_PATH: str = os.getenv("DATASET_PATH", "medquad.csv")
 
-# Embeddings. Multilingual, so Arabic questions can be matched against the English data.
-# Changing the model rebuilds the store on the next `python ingest.py`.
+# Embeddings. Changing the model rebuilds the store on the next `python ingest.py`.
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
 
 # LLM
@@ -42,5 +41,5 @@ LLM_TIMEOUT_SECONDS: float = _float("LLM_TIMEOUT_SECONDS", 120)
 # Retrieval
 RETRIEVAL_K: int = _int("RETRIEVAL_K", 3)
 MAX_CONTEXT_CHARS: int = _int("MAX_CONTEXT_CHARS", 3600)
-# Tuned on dev_questions.csv with `python evaluate.py --tune`; re-tune if you change the data or model.
+# Tuned on the dev sets with `python evaluate.py --tune`; re-tune if you change the data or models.
 MIN_RELEVANCE_SCORE: float = _float("MIN_RELEVANCE_SCORE", 0.85)
