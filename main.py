@@ -89,47 +89,48 @@ def chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
-    """Answer a health question with RAG and return the source passages used.
+    """Answer a health question with RAG, in the question's language, with the source passages used.
 
     Returns 503 if the knowledge base or the LLM is not ready yet.
     """
     question = request.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    language = safety.detect_language(question)
     if not rag.knowledge_base_ready():
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "The knowledge base is still being built. Please try again soon.")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, safety.reply("knowledge_base_not_ready", language))
 
-    route, docs_with_scores = rag.route_question(question)
+    try:
+        route, docs_with_scores = rag.route_question(question)
+    except rag.LLMUnavailableError:  # Arabic questions need the LLM to translate them
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, safety.reply("llm_unavailable", language))
 
     if route == "emergency":
         logger.warning("Emergency detected for user_id=%s", current_user.id)
-        return save_and_return_chat(db, current_user.id, question, safety.EMERGENCY_RESPONSE)
+        return save_and_return_chat(db, current_user.id, question, safety.reply("emergency", language))
     if route == "injection":
         logger.warning("Injection attempt detected for user_id=%s: %r", current_user.id, question)
-        return save_and_return_chat(db, current_user.id, question, safety.OFF_TOPIC_RESPONSE)
+        return save_and_return_chat(db, current_user.id, question, safety.reply("off_topic", language))
     if route == "greeting":
         return save_and_return_chat(db, current_user.id, question, safety.greeting_reply(question))
     if route == "off_topic":
-        return save_and_return_chat(db, current_user.id, question, safety.OFF_TOPIC_RESPONSE)
+        return save_and_return_chat(db, current_user.id, question, safety.reply("off_topic", language))
 
     # Medical question: the same passages go into the prompt and back to the user as sources.
     passages = rag.select_passages(docs_with_scores)
     context = rag.build_context(passages)
     if not context:
-        return save_and_return_chat(db, current_user.id, question, safety.OFF_TOPIC_RESPONSE)
+        return save_and_return_chat(db, current_user.id, question, safety.reply("off_topic", language))
 
     try:
-        answer = rag.generate_answer(question, context)
+        answer = rag.generate_answer(question, context, language)
     except rag.LLMUnavailableError:
         # Not saved to history: it is a temporary failure, not an answer.
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "The AI model is not available right now. Please try again in a moment.",
-        )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, safety.reply("llm_unavailable", language))
 
     if safety.mentions_emergency_condition(question):
-        answer += safety.EMERGENCY_NOTE
-    answer += safety.MEDICAL_DISCLAIMER
+        answer += safety.reply("emergency_note", language)
+    answer += safety.reply("disclaimer", language)
 
     sources = [rag.to_source(doc, score, text) for doc, score, text in passages]
     return save_and_return_chat(db, current_user.id, question, answer, sources)

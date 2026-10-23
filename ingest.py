@@ -33,15 +33,53 @@ DATASET_PATH = config.DATASET_PATH
 PERSIST_DIRECTORY = config.CHROMA_DIR
 EMBEDDING_MODEL = config.EMBEDDING_MODEL
 
-# all-MiniLM-L6-v2 reads at most 256 tokens and silently ignores the rest,
-# so every chunk (question + answer part + 2 special tokens) must fit in that.
-MAX_TOKENS = 256
 ANSWER_TOKENS = 200   # target size of the answer part of a chunk
 OVERLAP_TOKENS = 25
 BATCH_SIZE = 1000
 
 # Bump this when the chunk format changes, so existing stores get rebuilt.
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
+
+# Vector index settings. Cosine similarity keeps scores easy to reason about
+# (1.0 = same meaning). E5 scores sit close together, so Chroma's default index
+# (16 links per vector) missed the true best passage for about 1% of questions
+# and one of the true top 3 for about 15%; this graph is denser and searched wider.
+COLLECTION_METADATA = {
+    "hnsw:space": "cosine",
+    "hnsw:M": 48,
+    "hnsw:construction_ef": 400,
+    "hnsw:search_ef": 400,
+}
+
+
+def embedding_prefixes(model_name: str) -> tuple[str, str]:
+    """(query prefix, passage prefix) the model was trained with.
+
+    E5 models expect "query: " before questions and "passage: " before documents;
+    without them retrieval quality drops. Other models use no prefixes.
+    """
+    return ("query: ", "passage: ") if "e5" in model_name.lower() else ("", "")
+
+
+QUERY_PREFIX, PASSAGE_PREFIX = embedding_prefixes(EMBEDDING_MODEL)
+
+
+def make_embeddings() -> HuggingFaceEmbeddings:
+    """The embedding model, shared by ingestion and the app so both embed text the same way."""
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        encode_kwargs={"prompt": PASSAGE_PREFIX},
+        query_encode_kwargs={"prompt": QUERY_PREFIX},
+    )
+
+
+@lru_cache(maxsize=1)
+def max_tokens() -> int:
+    """Longest input the embedding model reads; anything after it is silently ignored."""
+    from huggingface_hub import hf_hub_download
+
+    with open(hf_hub_download(EMBEDDING_MODEL, "sentence_bert_config.json"), encoding="utf-8") as f:
+        return json.load(f)["max_seq_length"]
 
 
 def marker_path() -> str:
@@ -54,7 +92,10 @@ def fingerprint() -> str:
     digest = hashlib.sha256()
     with open(DATASET_PATH, "rb") as f:
         digest.update(f.read())
-    settings = [FORMAT_VERSION, EMBEDDING_MODEL, MAX_TOKENS, ANSWER_TOKENS, OVERLAP_TOKENS]
+    settings = [
+        FORMAT_VERSION, EMBEDDING_MODEL, QUERY_PREFIX, PASSAGE_PREFIX, max_tokens(),
+        ANSWER_TOKENS, OVERLAP_TOKENS, COLLECTION_METADATA,
+    ]
     digest.update(json.dumps(settings).encode())
     return digest.hexdigest()
 
@@ -91,8 +132,8 @@ def tokenizer():
 
 
 def count_tokens(text: str) -> int:
-    """Tokens the embedding model sees, including its [CLS] and [SEP] tokens."""
-    return len(tokenizer()(text)["input_ids"])
+    """Tokens the embedding model sees for a passage, including its prefix and special tokens."""
+    return len(tokenizer()(PASSAGE_PREFIX + text)["input_ids"])
 
 
 def load_documents(path: str) -> list[Document]:
@@ -116,7 +157,7 @@ def load_documents(path: str) -> list[Document]:
             # The question prefix uses part of the token budget, so the answer
             # part gets whatever is left (and at most ANSWER_TOKENS).
             prefix = f"Question: {question}\nAnswer: "
-            budget = min(ANSWER_TOKENS, MAX_TOKENS - count_tokens(prefix))
+            budget = min(ANSWER_TOKENS, max_tokens() - count_tokens(prefix))
             splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
                 tokenizer(), chunk_size=budget, chunk_overlap=OVERLAP_TOKENS
             )
@@ -140,7 +181,7 @@ def load_documents(path: str) -> list[Document]:
 
 def run_ingestion(rebuild: bool = False) -> None:
     """Embed the dataset into ChromaDB, unless a complete, current store already exists."""
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    embeddings = make_embeddings()
     store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embeddings)
 
     marker = read_marker()
@@ -164,16 +205,14 @@ def run_ingestion(rebuild: bool = False) -> None:
     documents = load_documents(DATASET_PATH)
     token_counts = [count_tokens(doc.page_content) for doc in documents]
     longest = max(token_counts)
-    print(f"Created {len(documents)} chunks, longest is {longest} tokens (limit {MAX_TOKENS}).")
-    if longest > MAX_TOKENS:
+    print(f"Created {len(documents)} chunks, longest is {longest} tokens (limit {max_tokens()}).")
+    if longest > max_tokens():
         raise SystemExit("A chunk is longer than the embedding model's limit; lower ANSWER_TOKENS.")
 
-    # Cosine similarity: relevance scores are then plain cosine similarity
-    # (1.0 = same meaning), which keeps thresholds easy to reason about.
     store = Chroma(
         persist_directory=PERSIST_DIRECTORY,
         embedding_function=embeddings,
-        collection_metadata={"hnsw:space": "cosine"},
+        collection_metadata=COLLECTION_METADATA,
     )
 
     print("Embedding and saving chunks (this takes a while on CPU)...")

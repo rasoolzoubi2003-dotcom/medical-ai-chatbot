@@ -6,7 +6,7 @@
 <title>Rounds — AI Medical Consultation</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,500&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,500&family=Inter:wght@400;500;600&family=Noto+Sans+Arabic:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root{
     --paper:#EEF1ED;
@@ -29,7 +29,7 @@
       repeating-linear-gradient(0deg, rgba(43,100,89,0.05) 0px, rgba(43,100,89,0.05) 1px, transparent 1px, transparent 28px),
       repeating-linear-gradient(90deg, rgba(43,100,89,0.05) 0px, rgba(43,100,89,0.05) 1px, transparent 1px, transparent 28px),
       var(--paper);
-    font-family:'Inter', sans-serif;
+    font-family:'Inter', 'Noto Sans Arabic', sans-serif;
     color:var(--ink);
     padding:40px 18px 60px;
   }
@@ -168,7 +168,7 @@
     border:1px solid var(--line);
     border-radius:8px;
     background:#FCFDFC;
-    font-family:'Inter', sans-serif;
+    font-family:'Inter', 'Noto Sans Arabic', sans-serif;
     font-size:14.5px;
     color:var(--ink);
     outline:none;
@@ -183,7 +183,7 @@
     padding:12px;
     border:none;
     border-radius:8px;
-    font-family:'Inter', sans-serif;
+    font-family:'Inter', 'Noto Sans Arabic', sans-serif;
     font-weight:600;
     font-size:14.5px;
     cursor:pointer;
@@ -284,7 +284,7 @@
     color:var(--muted);
     border:1px solid var(--line);
     font-size:12.5px;
-    font-family:'Inter', sans-serif;
+    font-family:'Inter', 'Noto Sans Arabic', sans-serif;
     font-weight:500;
   }
   .btn-ghost:hover{ background:rgba(43,100,89,0.07); color:var(--teal-deep); }
@@ -507,7 +507,7 @@
         <div id="history-box"></div>
 
         <div class="composer" id="composer">
-          <input type="text" id="question" placeholder="Describe your symptoms…" onkeydown="if(event.key==='Enter') sendQuestion()">
+          <input type="text" id="question" dir="auto" placeholder="Describe your symptoms… / اكتب سؤالك…" onkeydown="if(event.key==='Enter') sendQuestion()">
           <button type="button" class="btn-primary" onclick="sendQuestion()">Send</button>
         </div>
       </div>
@@ -728,7 +728,7 @@
     const q = qInput.value.trim();
     if (!q) return;
 
-    addMessage("user", "You", escapeHtml(q));
+    addMessage("user", "You", `<div class="text" dir="auto">${escapeHtml(q)}</div>`);
     qInput.value = "";
     setPulse(true, "Thinking");
 
@@ -740,7 +740,7 @@
       });
       if (res.ok) {
         const data = await res.json();
-        addMessage("bot", "Rounds", `<div class="text">${escapeHtml(data.answer)}</div>${renderSources(data.sources)}`);
+        addMessage("bot", "Rounds", `<div class="text" dir="auto">${escapeHtml(data.answer)}</div>${renderSources(data.sources)}`);
       } else {
         addMessage("bot error-msg", "Error", escapeHtml(await errorMessage(res, "Something went wrong. Please try again.")));
       }
@@ -794,8 +794,8 @@
           : data.map(entry => `
             <div class="history-entry">
               <span class="h-time">${escapeHtml(formatTimestamp(entry.timestamp))}</span>
-              <div class="h-q">${escapeHtml(entry.question)}</div>
-              <div class="h-a">${escapeHtml(entry.answer)}</div>
+              <div class="h-q" dir="auto">${escapeHtml(entry.question)}</div>
+              <div class="h-a" dir="auto">${escapeHtml(entry.answer)}</div>
               ${renderSources(entry.sources)}
             </div>`).join("");
       }

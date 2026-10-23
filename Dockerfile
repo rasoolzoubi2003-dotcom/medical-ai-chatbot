@@ -20,8 +20,10 @@ RUN useradd --create-home --uid 1000 app \
 USER app
 
 # Bake the embedding model into the image so containers start without internet.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
-ENV HF_HUB_OFFLINE=1
+ARG EMBEDDING_MODEL=intfloat/multilingual-e5-small
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')"
+ENV HF_HUB_OFFLINE=1 \
+    EMBEDDING_MODEL=${EMBEDDING_MODEL}
 
 COPY --chown=app:app . .
 
