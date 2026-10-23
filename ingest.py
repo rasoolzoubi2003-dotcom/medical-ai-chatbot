@@ -5,14 +5,22 @@ and every chunk repeats its question, so no passage ends up holding only a
 question or only a fragment with no topic. Source and topic are kept as
 metadata so answers can cite where their information came from.
 
+When a build finishes, a marker file records the number of chunks and a
+fingerprint of the dataset and settings. A store without a matching marker
+(an interrupted build, or a changed dataset or settings) is rebuilt.
+
 Usage:
-  python ingest.py            # build the store (skipped if it already exists)
+  python ingest.py            # build the store (skipped if a complete, current one exists)
   python ingest.py --rebuild  # delete the store and build it again
 """
 
 import argparse
 import csv
+import hashlib
+import json
+import os
 import time
+from functools import lru_cache
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -21,18 +29,72 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 DATASET_PATH = "medquad.csv"
 PERSIST_DIRECTORY = "./chromadb_store"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# all-MiniLM-L6-v2 reads at most 256 tokens (~1,000 characters); anything
-# longer is cut off. 800 characters plus the question stays under that.
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
+# all-MiniLM-L6-v2 reads at most 256 tokens and silently ignores the rest,
+# so every chunk (question + answer part + 2 special tokens) must fit in that.
+MAX_TOKENS = 256
+ANSWER_TOKENS = 200   # target size of the answer part of a chunk
+OVERLAP_TOKENS = 25
 BATCH_SIZE = 1000
+
+# Bump this when the chunk format changes, so existing stores get rebuilt.
+FORMAT_VERSION = 2
+
+
+def marker_path() -> str:
+    return os.path.join(PERSIST_DIRECTORY, "ingest_complete.json")
+
+
+@lru_cache(maxsize=1)
+def fingerprint() -> str:
+    """Hash of the dataset and the settings that shape the chunks."""
+    digest = hashlib.sha256()
+    with open(DATASET_PATH, "rb") as f:
+        digest.update(f.read())
+    settings = [FORMAT_VERSION, EMBEDDING_MODEL, MAX_TOKENS, ANSWER_TOKENS, OVERLAP_TOKENS]
+    digest.update(json.dumps(settings).encode())
+    return digest.hexdigest()
+
+
+def read_marker() -> dict | None:
+    try:
+        with open(marker_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def write_marker(chunks: int) -> None:
+    # Write to a temp file first, so a crash can't leave a half-written marker.
+    tmp_path = marker_path() + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump({"chunks": chunks, "fingerprint": fingerprint()}, f)
+    os.replace(tmp_path, marker_path())
+
+
+def store_is_complete(store: Chroma) -> bool:
+    """True if a build finished and the store still holds every chunk it wrote."""
+    marker = read_marker()
+    return marker is not None and marker.get("chunks") == len(store.get(include=[])["ids"])
+
+
+@lru_cache(maxsize=1)
+def tokenizer():
+    from transformers import AutoTokenizer, logging as transformers_logging
+
+    # Measuring whole answers before splitting triggers a harmless "too long" warning.
+    transformers_logging.set_verbosity_error()
+    return AutoTokenizer.from_pretrained(EMBEDDING_MODEL)
+
+
+def count_tokens(text: str) -> int:
+    """Tokens the embedding model sees, including its [CLS] and [SEP] tokens."""
+    return len(tokenizer()(text)["input_ids"])
 
 
 def load_documents(path: str) -> list[Document]:
     """Turn every CSV row into one or more chunks of 'Question + part of the answer'."""
-    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     documents: list[Document] = []
     seen: set[tuple[str, str]] = set()
     skipped_empty = skipped_duplicate = 0
@@ -49,9 +111,17 @@ def load_documents(path: str) -> list[Document]:
                 continue
             seen.add((question, answer))
 
+            # The question prefix uses part of the token budget, so the answer
+            # part gets whatever is left (and at most ANSWER_TOKENS).
+            prefix = f"Question: {question}\nAnswer: "
+            budget = min(ANSWER_TOKENS, MAX_TOKENS - count_tokens(prefix))
+            splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
+                tokenizer(), chunk_size=budget, chunk_overlap=OVERLAP_TOKENS
+            )
+
             for chunk_number, chunk in enumerate(splitter.split_text(answer)):
                 documents.append(Document(
-                    page_content=f"Question: {question}\nAnswer: {chunk}",
+                    page_content=prefix + chunk,
                     metadata={
                         "row": row_number,
                         "chunk": chunk_number,
@@ -67,22 +137,34 @@ def load_documents(path: str) -> list[Document]:
 
 
 def run_ingestion(rebuild: bool = False) -> None:
-    """Embed the dataset into ChromaDB, unless a store already exists and rebuild is False."""
+    """Embed the dataset into ChromaDB, unless a complete, current store already exists."""
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
     store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embeddings)
 
-    # Re-running used to add every chunk a second time. Now we skip if the
-    # store is already built, or start from an empty store with --rebuild.
+    marker = read_marker()
+    is_current = marker is not None and marker.get("fingerprint") == fingerprint()
+    if not rebuild and is_current and store_is_complete(store):
+        print(f"Vector store is complete ({marker['chunks']} chunks), skipping ingestion (use --rebuild to recreate it).")
+        return
+
     if store.get(limit=1)["ids"]:
-        if not rebuild:
-            print("Vector store already exists, skipping ingestion (use --rebuild to recreate it).")
-            return
-        print("Deleting existing vector store...")
-        store.delete_collection()
+        reason = "--rebuild requested" if rebuild else (
+            "dataset or settings changed" if marker and not is_current
+            else "no matching completion marker: the last build did not finish or used an older format"
+        )
+        print(f"Deleting existing vector store ({reason})...")
+    # Remove the marker before touching the data, so an interrupted rebuild is detected.
+    if os.path.exists(marker_path()):
+        os.remove(marker_path())
+    store.delete_collection()
 
     print(f"Loading {DATASET_PATH}...")
     documents = load_documents(DATASET_PATH)
-    print(f"Created {len(documents)} chunks.")
+    token_counts = [count_tokens(doc.page_content) for doc in documents]
+    longest = max(token_counts)
+    print(f"Created {len(documents)} chunks, longest is {longest} tokens (limit {MAX_TOKENS}).")
+    if longest > MAX_TOKENS:
+        raise SystemExit("A chunk is longer than the embedding model's limit; lower ANSWER_TOKENS.")
 
     # Cosine similarity: relevance scores are then plain cosine similarity
     # (1.0 = same meaning), which keeps thresholds easy to reason about.
@@ -99,6 +181,7 @@ def run_ingestion(rebuild: bool = False) -> None:
         done = min(start + BATCH_SIZE, len(documents))
         print(f"  {done}/{len(documents)} chunks ({time.time() - started:.0f}s)", flush=True)
 
+    write_marker(len(documents))
     print(f"Vector store ready at {PERSIST_DIRECTORY}.")
 
 

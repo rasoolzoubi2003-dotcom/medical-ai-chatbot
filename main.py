@@ -15,6 +15,7 @@ import bcrypt
 
 import models, schemas, database
 from database import engine, get_db
+from ingest import store_is_complete
 
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -57,12 +58,12 @@ vector_db = Chroma(persist_directory="./chromadb_store", embedding_function=embe
 
 
 def vector_store_is_ready() -> bool:
-    """True if the vector store contains at least one document."""
-    return bool(vector_db.get(limit=1)["ids"])
+    """True if ingestion finished and the store holds every chunk it wrote."""
+    return store_is_complete(vector_db)
 
 
 if not vector_store_is_ready():
-    logger.warning("Vector store is empty. Run `python ingest.py` first, or medical questions cannot be answered.")
+    logger.warning("Vector store is missing or incomplete. Run `python ingest.py` first.")
 
 logger.info("Connecting to Ollama...")
 # لو التطبيق شغّال جوا Docker وOllama عندو خدمة منفصلة، منحدد عنوانها عبر
@@ -246,8 +247,9 @@ CHITCHAT_PROMPT = ChatPromptTemplate.from_messages([
 RETRIEVAL_K = 3
 
 # سقف طول الـ context بالحروف
-# Chunks are up to ~1,000 characters (see ingest.py), so this fits RETRIEVAL_K of them.
-MAX_CONTEXT_CHARS = 3000
+# Chunks are at most 256 tokens, 99% under ~1,200 characters (see ingest.py),
+# so this fits RETRIEVAL_K of them.
+MAX_CONTEXT_CHARS = 3600
 
 # حد أدنى للثقة بالتصنيف الدلالي — لو أعلى فئة ما وصلت هالحد،
 # نعتبر السؤال خارج النطاق بدل ما "نخمّن" بأقرب فئة موجودة
