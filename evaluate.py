@@ -91,7 +91,8 @@ def shares_answer_text(passage: str, answers: list[str], min_chars: int = MIN_SH
             if answer and answer in passage:
                 return True
             continue
-        # Slide a window over the passage and look for it inside the answer.
+        # Windows start every 10 characters to keep this fast, so a shared run of
+        # min_chars + 9 characters or more is always found.
         for start in range(0, len(passage) - min_chars + 1, 10):
             if passage[start:start + min_chars] in answer:
                 return True
